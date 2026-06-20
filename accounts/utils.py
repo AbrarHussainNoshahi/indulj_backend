@@ -9,14 +9,24 @@ def generate_otp():
 
 
 def send_otp_email(email, otp):
+    subject = "INDULJ - Your OTP Code"
+    message = f"""
+    Hello 👋,
+
+    Your OTP code is: {otp}
+
+    This code will expire in 10 minutes.
+
+    If you did not request this, ignore this email.
+    """
+
     send_mail(
-        subject='INDULJ - Your Verification Code',
-        message=f'Your OTP is: {otp}\n\nExpires in 10 minutes.',
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[email],
+        subject,
+        message,
+        settings.DEFAULT_FROM_EMAIL,
+        [email],
         fail_silently=False,
     )
-
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
