@@ -1,32 +1,46 @@
 import random
 from django.core.mail import send_mail
+import logging
 from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
 
+logger = logging.getLogger(__name__)
 
 def generate_otp():
     return str(random.randint(100000, 999999))
 
 
+# def send_otp_email(email, otp):
+#     subject = "INDULJ - Your OTP Code"
+#     message = f"""
+#     Hello 👋,
+
+#     Your OTP code is: {otp}
+
+#     This code will expire in 10 minutes.
+
+#     If you did not request this, ignore this email.
+#     """
+
+#     send_mail(
+#         subject,
+#         message,
+#         settings.DEFAULT_FROM_EMAIL,
+#         [email],
+#         fail_silently=False,
+#     )
+
 def send_otp_email(email, otp):
-    subject = "INDULJ - Your OTP Code"
-    message = f"""
-    Hello 👋,
-
-    Your OTP code is: {otp}
-
-    This code will expire in 10 minutes.
-
-    If you did not request this, ignore this email.
-    """
-
-    send_mail(
-        subject,
-        message,
-        settings.DEFAULT_FROM_EMAIL,
-        [email],
-        fail_silently=False,
-    )
+    try:
+        send_mail(
+            subject="INDULJ OTP Code",
+            message=f"Your OTP is {otp}",
+            from_email=None,
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        logger.error(f"OTP email failed: {e}")
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
