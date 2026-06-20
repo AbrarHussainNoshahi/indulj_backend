@@ -134,9 +134,9 @@ SIMPLE_JWT = {
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_COOKIE':              'access_token',
     'AUTH_COOKIE_REFRESH':      'refresh_token',
-    'AUTH_COOKIE_SECURE':       False,   # True in production
+    'AUTH_COOKIE_SECURE':       True,   # True in production
     'AUTH_COOKIE_HTTP_ONLY':    True,
-    'AUTH_COOKIE_SAMESITE':     'Lax',
+    'AUTH_COOKIE_SAMESITE':     'None',
 }
 
 

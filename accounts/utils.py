@@ -27,8 +27,8 @@ def get_tokens_for_user(user):
 
 
 def set_auth_cookies(response, access_token, refresh_token):
-    is_secure = settings.SIMPLE_JWT.get('AUTH_COOKIE_SECURE', False)
-    samesite  = settings.SIMPLE_JWT.get('AUTH_COOKIE_SAMESITE', 'Lax')
+    is_secure = settings.SIMPLE_JWT.get('AUTH_COOKIE_SECURE', True)
+    samesite  = settings.SIMPLE_JWT.get('AUTH_COOKIE_SAMESITE', 'None')
 
     response.set_cookie(
         key='access_token',
