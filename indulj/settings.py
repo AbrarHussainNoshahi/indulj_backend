@@ -116,6 +116,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "https://indulj.vercel.app",
+    "https://indulj-v1.vercel.app"
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -124,6 +125,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
     "https://indulj.vercel.app",
+    "https://indulj-v1.vercel.app"
 ]
 
 
@@ -179,6 +181,6 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = config("EMAIL_HOST_USER")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD")
 
-# DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
-DEFAULT_FROM_EMAIL = 'noreply@indulj.com'
+DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
+# DEFAULT_FROM_EMAIL = 'noreply@indulj.com'
 GOOGLE_CLIENT_ID = os.getenv('GOOGLE_CLIENT_ID')
