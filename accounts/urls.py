@@ -1,0 +1,33 @@
+from django.urls import path
+from .views import (
+    RegisterView, VerifyOTPView, ResendOTPView,
+    LoginView, LogoutView, GoogleAuthView,
+    CookieTokenRefreshView, ProfileView,
+    ChangePasswordView, DeleteAccountView,
+    NotificationPreferenceView,
+    SessionListView, SessionRevokeView,
+    ReferralCodeView,
+)
+
+urlpatterns = [
+    # Auth
+    path('register/',      RegisterView.as_view()),
+    path('verify-otp/',    VerifyOTPView.as_view()),
+    path('resend-otp/',    ResendOTPView.as_view()),
+    path('login/',         LoginView.as_view()),
+    path('logout/',        LogoutView.as_view()),
+    path('google/',        GoogleAuthView.as_view()),
+    path('token/refresh/', CookieTokenRefreshView.as_view()),
+
+    # Profile
+    path('profile/',         ProfileView.as_view()),
+    path('profile/update/',  ProfileView.as_view()),
+    path('change-password/', ChangePasswordView.as_view()),
+    path('delete-account/',  DeleteAccountView.as_view()),
+    path('referral-code/',   ReferralCodeView.as_view()),
+
+    # Settings
+    path('notification-prefs/', NotificationPreferenceView.as_view()),
+    path('sessions/',           SessionListView.as_view()),
+    path('sessions/<int:session_id>/revoke/', SessionRevokeView.as_view()),
+]
