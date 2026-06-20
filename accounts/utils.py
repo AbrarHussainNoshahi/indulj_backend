@@ -3,6 +3,8 @@ from django.core.mail import send_mail
 import logging
 from django.conf import settings
 from rest_framework_simplejwt.tokens import RefreshToken
+from decouple import config
+
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +37,7 @@ def send_otp_email(email, otp):
         send_mail(
             subject="INDULJ OTP Code",
             message=f"Your OTP is {otp}",
-            from_email=None,
+            from_email=config("EMAIL_HOST_USER"),
             recipient_list=[email],
             fail_silently=False,
         )
