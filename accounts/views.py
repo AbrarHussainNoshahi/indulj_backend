@@ -1,5 +1,6 @@
 import requests as http_requests
 from django.contrib.auth import authenticate
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -47,12 +48,21 @@ class RegisterView(APIView):
             otp=otp,
             expires_at=timezone.now() + timezone.timedelta(minutes=10)
         )
+        
         send_otp_email(user.email, otp)
-        return Response({
-            'success': True,
-            'message': 'OTP sent to your email.',
-            'email':   user.email,
-        }, status=status.HTTP_201_CREATED)
+        response_data = {
+            "success": True,
+            "message": "OTP sent to your email.",
+            "email": user.email,
+        }
+        if settings.DEBUG:
+            response_data["dev_otp"] = otp
+        return Response(response_data, status=status.HTTP_201_CREATED)
+        # return Response({
+        #     'success': True,
+        #     'message': 'OTP sent to your email.',
+        #     'email':   user.email,
+        # }, status=status.HTTP_201_CREATED)
 
 
 # ─── VERIFY OTP ─────────────────────────────────────────────
@@ -123,7 +133,16 @@ class ResendOTPView(APIView):
             expires_at=timezone.now() + timezone.timedelta(minutes=10)
         )
         send_otp_email(user.email, otp)
-        return Response({'success': True, 'message': 'New OTP sent'})
+        response_data = {
+            "success": True,
+            "message": "New OTP sent",
+        }
+
+        if settings.DEBUG:
+            response_data["dev_otp"] = otp
+
+        return Response(response_data)
+        # return Response({'success': True, 'message': 'New OTP sent'})
 
 
 # ─── LOGIN ──────────────────────────────────────────────────
