@@ -91,6 +91,7 @@ class AdminCreateRestaurantView(APIView):
             email=data["email"],
             description=data.get("description", ""),
             categories=data.get("categories", []),
+            status="active",
         )
 
         return Response(
