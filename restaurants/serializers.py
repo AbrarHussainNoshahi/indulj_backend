@@ -99,6 +99,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "address",
             "city",
             "categories",
+            "operating_hours",
             "rating",
             "total_reviews",
             "logo_url",
@@ -122,7 +123,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
         return 0
 
     def get_total_happy_hours(self, obj):
-        return 0
+        return obj.happy_hours.count()
 
 class RestaurantDetailSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()

@@ -72,19 +72,21 @@ TEMPLATES = [
 WSGI_APPLICATION = 'indulj.wsgi.application'
 
 # PostgreSQL Database
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': os.getenv('DB_NAME', 'indulj_db'),
-        'USER': os.getenv('DB_USER', 'postgres'),
-        'PASSWORD': os.getenv('DB_PASSWORD', 'admin'),
-        'HOST': os.getenv('DB_HOST', 'localhost'),
-        'PORT': os.getenv('DB_PORT', '5432'),
+if DEBUG:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": os.getenv("DB_NAME", "indulj_db"),
+            "USER": os.getenv("DB_USER", "postgres"),
+            "PASSWORD": os.getenv("DB_PASSWORD", "admin"),
+            "HOST": os.getenv("DB_HOST", "localhost"),
+            "PORT": os.getenv("DB_PORT", "5432"),
+        }
     }
-}
-
-DATABASES['default'] = dj_database_url.parse(config("DATABASE_URL"))
-
+else:
+    DATABASES = {
+        "default": dj_database_url.parse(config("DATABASE_URL"))
+    }
 # Custom user model
 AUTH_USER_MODEL = 'accounts.User'
 
@@ -145,11 +147,14 @@ SIMPLE_JWT = {
     
     'AUTH_COOKIE':              'access_token',
     'AUTH_COOKIE_REFRESH':      'refresh_token',
-    'AUTH_COOKIE_SECURE':       True,   # True in production
-    'AUTH_COOKIE_HTTP_ONLY':    True,
-    'AUTH_COOKIE_SAMESITE':     'None',
+    
+    'AUTH_COOKIE_SECURE': not DEBUG,
+    'AUTH_COOKIE_SAMESITE': 'None' if not DEBUG else 'Lax',
     
     'AUTH_HEADER_TYPES': ('Bearer',),
+    
+    #for development 
+    # 'AUTH_COOKIE_HTTP_ONLY': True, 
 }
 
 
