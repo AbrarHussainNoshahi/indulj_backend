@@ -30,7 +30,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'django_filters',
     'cloudinary',
-    'cloudinary_storage'
+    'cloudinary_storage',
 
     # Our apps
     'accounts',
