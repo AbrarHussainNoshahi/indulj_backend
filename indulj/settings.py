@@ -119,7 +119,7 @@ STORAGES = {
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
     },
     "staticfiles": {
-        "BACKEND": "django.core.files.storage.FileSystemStorage",
+         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
     },
 }
 MEDIA_URL = '/media/'
