@@ -123,7 +123,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
         return 0
 
     def get_total_happy_hours(self, obj):
-        return obj.happy_hours.count()
+        return 0
 
 class RestaurantDetailSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
