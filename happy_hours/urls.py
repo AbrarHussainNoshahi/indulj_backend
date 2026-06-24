@@ -10,6 +10,7 @@ from .views import (
     MapHappyHoursView,
     MyHappyHoursView,
     PlanHappyHourView,
+    CancelMyHappyHourView,
     PublicHappyHourDetailView,
     PublicHappyHourListView,
     RestaurantAcceptAllHappyHoursView,
@@ -25,6 +26,7 @@ urlpatterns = [
     path("public/", PublicHappyHourListView.as_view()),
     path("public/map/", MapHappyHoursView.as_view()),
     path("public/<int:pk>/", PublicHappyHourDetailView.as_view()),
+    path("<int:pk>/cancel/", CancelMyHappyHourView.as_view()),
 
     # User
     path("plan/", PlanHappyHourView.as_view()),

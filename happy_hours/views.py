@@ -136,7 +136,7 @@ class PlanHappyHourView(APIView):
 
     def post(self, request):
         serializer = PlanHappyHourSerializer(data=request.data)
-
+        print("REQUEST DATA:", request.data)
         if not serializer.is_valid():
             return Response(
                 {
@@ -268,6 +268,33 @@ class DeleteMyHappyHourView(APIView):
 
         happy_hour.delete()
         return Response({"success": True, "message": "Happy hour deleted"})
+
+class CancelMyHappyHourView(APIView):
+    permission_classes = [IsAuthenticated, IsUser]
+
+    def post(self, request, pk):
+        try:
+            hh = HappyHour.objects.get(pk=pk, submitted_by=request.user)
+
+            if hh.status != "pending":
+                return Response({
+                    "success": False,
+                    "message": "Only pending happy hours can be cancelled"
+                }, status=400)
+
+            hh.status = "cancelled"
+            hh.save()
+
+            return Response({
+                "success": True,
+                "message": "Happy hour cancelled successfully"
+            })
+
+        except HappyHour.DoesNotExist:
+            return Response({
+                "success": False,
+                "message": "Not found"
+            }, status=404)
 
 
 class RestaurantHappyHourListView(APIView):

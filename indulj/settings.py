@@ -119,7 +119,7 @@ STORAGES = {
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
     },
     "staticfiles": {
-         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
+         "BACKEND": "cloudinary_storage.storage.StaticCloudinaryStorage",
     },
 }
 MEDIA_URL = '/media/'
