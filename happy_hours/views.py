@@ -1,5 +1,6 @@
 from django.utils import timezone
 from rest_framework import status
+from notifications.utils import create_notification, notify_admins, check_and_expire_happy_hours
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -24,6 +25,7 @@ class PublicHappyHourListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
+        check_and_expire_happy_hours()
         qs = HappyHour.objects.filter(
             status__in=["active", "upcoming"],
             is_public=True,
@@ -203,27 +205,25 @@ class PlanHappyHourView(APIView):
         )
 
     def _notify_restaurant(self, happy_hour):
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
-                user=happy_hour.restaurant.owner,
-                type="happy_hour",
-                title="New Happy Hour Request!",
-                message=(
-                    f"{happy_hour.submitted_by.full_name} wants to plan "
-                    f"a {happy_hour.event_type.replace('_', ' ')} "
-                    f"for {happy_hour.group_size} people."
-                ),
-                related_happy_hour=happy_hour,
-            )
-        except Exception:
-            pass
+        create_notification(
+            user=happy_hour.restaurant.owner,
+            type="happy_hour",
+            title="New Happy Hour Request",
+            message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title} for {happy_hour.group_size} people.",
+            related_happy_hour=happy_hour,
+        )
+        notify_admins(
+            type="happy_hour",
+            title="New Happy Hour Request",
+            message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title} for {happy_hour.group_size} people.",
+            related_happy_hour=happy_hour,
+        )
 
 class MyHappyHoursView(APIView):
     permission_classes = [IsAuthenticated, IsUser]
 
     def get(self, request):
+        check_and_expire_happy_hours()
         qs = HappyHour.objects.filter(
             submitted_by=request.user,
         ).select_related("restaurant")
@@ -285,6 +285,14 @@ class CancelMyHappyHourView(APIView):
             hh.status = "cancelled"
             hh.save()
 
+            create_notification(
+                user=hh.restaurant.owner,
+                type="happy_hour",
+                title="Happy Hour Cancelled",
+                message=f"{request.user.full_name} cancelled their happy hour request.",
+                related_happy_hour=hh,
+            )
+
             return Response({
                 "success": True,
                 "message": "Happy hour cancelled successfully"
@@ -301,6 +309,7 @@ class RestaurantHappyHourListView(APIView):
     permission_classes = [IsAuthenticated, IsRestaurant]
 
     def get(self, request):
+        check_and_expire_happy_hours()
         try:
             restaurant = Restaurant.objects.get(owner=request.user)
         except Restaurant.DoesNotExist:
@@ -476,7 +485,14 @@ class RestaurantAcceptHappyHourView(APIView):
             ]
         )
 
-        self._notify_user(happy_hour, accepted=True)
+        if happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.submitted_by,
+                type="happy_hour",
+                title="Happy Hour Accepted",
+                message=f"{happy_hour.restaurant.name} accepted your happy hour request.",
+                related_happy_hour=happy_hour,
+            )
 
         return Response({
             "success": True,
@@ -486,23 +502,6 @@ class RestaurantAcceptHappyHourView(APIView):
                 context={"request": request},
             ).data,
         })
-
-    def _notify_user(self, happy_hour, accepted=True):
-        if not happy_hour.submitted_by:
-            return
-
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
-                user=happy_hour.submitted_by,
-                type="happy_hour",
-                title="Happy Hour Accepted! 🎉",
-                message=f"Your happy hour at {happy_hour.restaurant.name} has been accepted.",
-                related_happy_hour=happy_hour,
-            )
-        except Exception:
-            pass
 
 
 class RestaurantRejectHappyHourView(APIView):
@@ -534,6 +533,15 @@ class RestaurantRejectHappyHourView(APIView):
         happy_hour.rejection_reason = serializer.validated_data["rejection_reason"]
         happy_hour.rejected_at = timezone.now()
         happy_hour.save(update_fields=["status", "rejection_reason", "rejected_at"])
+
+        if happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.submitted_by,
+                type="happy_hour",
+                title="Happy Hour Rejected",
+                message=f"{happy_hour.restaurant.name} rejected your happy hour request. Reason: {happy_hour.rejection_reason}",
+                related_happy_hour=happy_hour,
+            )
 
         return Response({
             "success": True,
@@ -576,6 +584,7 @@ class AdminHappyHourListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        check_and_expire_happy_hours()
         qs = HappyHour.objects.select_related("restaurant", "submitted_by").all()
 
         status_filter = request.query_params.get("status")

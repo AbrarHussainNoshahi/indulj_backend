@@ -5,6 +5,7 @@ from rest_framework import status
 
 from accounts.permissions import IsAdmin, IsRestaurant, IsUser
 from .models import Order
+from notifications.utils import create_notification
 from .serializers import (
     CreateOrderSerializer,
     OrderDetailSerializer,
@@ -95,18 +96,13 @@ class CreateOrderView(APIView):
         )
 
     def _notify_restaurant(self, order):
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
-                user=order.restaurant.owner,
-                type="order",
-                title=f"New Booking {order.order_number}",
-                message=f"{order.user.full_name} created a new {order.order_type.replace('_', ' ')} booking.",
-                related_order=order,
-            )
-        except Exception:
-            pass
+        create_notification(
+            user=order.restaurant.owner,
+            type="order",
+            title=f"New Booking {order.order_number}",
+            message=f"{order.user.full_name} created a new {order.order_type} booking.",
+            related_order=order,
+        )
 
 
 class MyOrdersView(APIView):
@@ -162,6 +158,14 @@ class CancelMyOrderView(APIView):
             )
 
         order.mark_cancelled()
+
+        create_notification(
+            user=order.restaurant.owner,
+            type="order",
+            title=f"Booking Cancelled {order.order_number}",
+            message=f"{request.user.full_name} cancelled their booking.",
+            related_order=order,
+        )
 
         return Response(
             {
@@ -308,7 +312,13 @@ class RestaurantAcceptOrderView(APIView):
 
         order.mark_confirmed(serializer.validated_data.get("response", ""))
 
-        self._notify_user(order, "Order Confirmed", f"Your booking {order.order_number} has been confirmed.")
+        create_notification(
+            user=order.user,
+            type="order",
+            title=f"Booking Confirmed {order.order_number}",
+            message=f"{order.restaurant.name} confirmed your booking.",
+            related_order=order,
+        )
 
         return Response(
             {
@@ -320,20 +330,6 @@ class RestaurantAcceptOrderView(APIView):
                 ).data,
             }
         )
-
-    def _notify_user(self, order, title, message):
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
-                user=order.user,
-                type="order",
-                title=title,
-                message=message,
-                related_order=order,
-            )
-        except Exception:
-            pass
 
 
 class RestaurantRejectOrderView(APIView):
@@ -366,7 +362,13 @@ class RestaurantRejectOrderView(APIView):
         reason = serializer.validated_data["rejection_reason"]
         order.mark_rejected(reason)
 
-        self._notify_user(order, "Order Rejected", f"Your booking {order.order_number} was rejected. Reason: {reason}")
+        create_notification(
+            user=order.user,
+            type="order",
+            title=f"Booking Rejected {order.order_number}",
+            message=f"Booking rejected by {order.restaurant.name}. Reason: {reason}",
+            related_order=order,
+        )
 
         return Response(
             {
@@ -378,20 +380,6 @@ class RestaurantRejectOrderView(APIView):
                 ).data,
             }
         )
-
-    def _notify_user(self, order, title, message):
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
-                user=order.user,
-                type="order",
-                title=title,
-                message=message,
-                related_order=order,
-            )
-        except Exception:
-            pass
 
 
 class RestaurantCompleteOrderView(APIView):
@@ -419,6 +407,14 @@ class RestaurantCompleteOrderView(APIView):
             )
 
         order.mark_completed()
+
+        create_notification(
+            user=order.user,
+            type="order",
+            title=f"Booking Completed {order.order_number}",
+            message=f"Your booking at {order.restaurant.name} has been completed.",
+            related_order=order,
+        )
 
         return Response(
             {

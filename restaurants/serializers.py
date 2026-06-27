@@ -120,10 +120,10 @@ class RestaurantListSerializer(serializers.ModelSerializer):
         return None
 
     def get_total_deals(self, obj):
-        return 0
+        return obj.deals.count()
 
     def get_total_happy_hours(self, obj):
-        return 0
+        return obj.happy_hours.count()
 
 class RestaurantDetailSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
@@ -170,12 +170,10 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
         return None
 
     def get_total_deals(self, obj):
-        # Step 4 Deals not built yet
-        return 0
+        return obj.deals.count()
 
     def get_total_happy_hours(self, obj):
-        # Step 5 Happy Hours not built yet
-        return 0
+        return obj.happy_hours.count()
 
 
 class CreateRestaurantSerializer(serializers.Serializer):

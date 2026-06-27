@@ -8,6 +8,8 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.exceptions import TokenError
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.db.models import Count, Sum, Q
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
 from .models import NotificationPreference, OTPVerification, User, UserSession
 from .serializers import (
@@ -190,45 +192,81 @@ class GoogleAuthView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        access_token = request.data.get('token')
+        access_token = request.data.get("token")
+
         if not access_token:
-            return Response({'success': False, 'message': 'Token required'}, status=400)
+            return Response({
+                "success": False,
+                "message": "Token required",
+            }, status=400)
 
         google_response = http_requests.get(
-            'https://www.googleapis.com/oauth2/v3/userinfo',
-            headers={'Authorization': f'Bearer {access_token}'}
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
         )
-        if google_response.status_code != 200:
-            return Response({'success': False, 'message': 'Invalid Google token'}, status=400)
 
-        info      = google_response.json()
-        email     = info.get('email')
-        full_name = info.get('name', '')
+        if google_response.status_code != 200:
+            return Response({
+                "success": False,
+                "message": "Invalid Google token",
+            }, status=400)
+
+        info = google_response.json()
+        email = info.get("email")
+        full_name = info.get("name", "")
 
         if not email:
-            return Response({'success': False, 'message': 'Could not get email'}, status=400)
+            return Response({
+                "success": False,
+                "message": "Could not get email",
+            }, status=400)
 
         user, created = User.objects.get_or_create(
             email=email,
             defaults={
-                'full_name':         full_name,
-                'role':              'user',
-                'is_email_verified': True,
-            }
+                "full_name": full_name,
+                "role": "user",
+                "is_email_verified": True,
+                "google_linked": True,
+            },
         )
+
         if user.is_suspended:
-            return Response({'success': False, 'message': 'Account suspended'}, status=403)
+            return Response({
+                "success": False,
+                "message": "Account suspended",
+            }, status=403)
+
+        update_fields = []
+
+        if not user.is_email_verified:
+            user.is_email_verified = True
+            update_fields.append("is_email_verified")
+
+        if not user.google_linked:
+            user.google_linked = True
+            update_fields.append("google_linked")
+
+        if not user.full_name and full_name:
+            user.full_name = full_name
+            update_fields.append("full_name")
+
+        if update_fields:
+            user.save(update_fields=update_fields)
+
         if created:
             NotificationPreference.objects.create(user=user)
 
-        tokens   = get_tokens_for_user(user)
+        tokens = get_tokens_for_user(user)
+
         response = Response({
             **make_user_data(user, request),
-            'message': 'Google login successful',
+            "message": "Google login successful",
         })
-        set_auth_cookies(response, tokens['access'], tokens['refresh'])
-        return response
 
+        set_auth_cookies(response, tokens["access"], tokens["refresh"])
+
+        return response
 
 # ─── LOGOUT ─────────────────────────────────────────────────
 class LogoutView(APIView):
@@ -267,26 +305,43 @@ class CookieTokenRefreshView(APIView):
 # ─── PROFILE ────────────────────────────────────────────────
 class ProfileView(APIView):
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def get(self, request):
         return Response({
-            'success': True,
-            'data': UserSerializer(request.user, context={'request': request}).data
+            "success": True,
+            "data": UserSerializer(
+                request.user,
+                context={"request": request},
+            ).data,
         })
 
     def put(self, request):
         serializer = UpdateProfileSerializer(
-            request.user, data=request.data, partial=True
+            request.user,
+            data=request.data,
+            partial=True,
         )
+
         if serializer.is_valid():
             serializer.save()
-            return Response({
-                'success': True,
-                'message': 'Profile updated',
-                'data':    UserSerializer(request.user, context={'request': request}).data
-            })
-        return Response({'success': False, 'errors': serializer.errors}, status=400)
 
+            return Response({
+                "success": True,
+                "message": "Profile updated",
+                "data": UserSerializer(
+                    request.user,
+                    context={"request": request},
+                ).data,
+            })
+
+        return Response({
+            "success": False,
+            "errors": serializer.errors,
+        }, status=400)
+
+    def patch(self, request):
+        return self.put(request)
 
 # ─── CHANGE PASSWORD ────────────────────────────────────────
 class ChangePasswordView(APIView):
@@ -358,3 +413,227 @@ class ReferralCodeView(APIView):
 
     def get(self, request):
         return Response({'success': True, 'data': {'referral_code': request.user.referral_code}})
+
+
+class RemoveAvatarView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        user = request.user
+
+        if user.avatar:
+            user.avatar.delete(save=False)
+            user.avatar = None
+            user.save(update_fields=["avatar"])
+
+        return Response({
+            "success": True,
+            "message": "Avatar removed successfully.",
+        })
+
+
+class ToggleTwoFactorView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        user = request.user
+        user.two_factor_enabled = not user.two_factor_enabled
+        user.save(update_fields=["two_factor_enabled"])
+
+        status_text = "enabled" if user.two_factor_enabled else "disabled"
+
+        return Response({
+            "success": True,
+            "message": f"Two-factor authentication {status_text}.",
+            "two_factor_enabled": user.two_factor_enabled,
+        })
+
+
+class UserStatsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        from deals.models import Deal, SavedDeal
+        from happy_hours.models import HappyHour
+        from orders.models import Order
+
+        user = request.user
+
+        # submitted_deals = Deal.objects.filter(submitted_by=user).count()
+        submitted_deals = Deal.objects.filter(
+            Q(submitted_by=user) |
+            Q(restaurant__owner=user)
+        ).distinct().count()
+        
+        user_created_deals = Deal.objects.filter(submitted_by=user).count()
+
+        restaurant_created_deals = Deal.objects.filter(
+            restaurant__owner=user,
+            submitted_by__isnull=True
+        ).count()
+        
+        planned_happy_hours = HappyHour.objects.filter(submitted_by=user).count()
+        saved_deals = SavedDeal.objects.filter(user=user).count()
+
+        total_savings = float(
+            Order.objects.filter(
+                user=user,
+                status="completed",
+                deal__isnull=False,
+            ).aggregate(total=Sum("total_amount"))["total"] or 0
+        )
+
+        return Response({
+            "success": True,
+            "data": {
+                "points": user.points,
+                "total_savings": total_savings,
+                "submitted_deals": submitted_deals,
+                "user_created_deals": user_created_deals,
+                "restaurant_created_deals": restaurant_created_deals,
+                "planned_happy_hours": planned_happy_hours,
+                "saved_deals": saved_deals,
+            }
+        })
+
+
+# ─── ADMIN USERS MANAGEMENT ─────────────────────────────────
+from datetime import timedelta
+from .permissions import IsAdmin
+
+class AdminUsersListView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get(self, request):
+        now = timezone.now()
+        thirty_days_ago = now - timedelta(days=30)
+        
+        users = (
+            User.objects.filter(role="user")
+            .annotate(
+                deals_count=Count("submitted_deals", distinct=True),
+                happy_hours_count=Count("planned_happy_hours", distinct=True),
+            )
+            .order_by("-date_joined")
+        )
+        
+        data = []
+        for u in users:
+            if u.is_suspended:
+                status_label = "Suspended"
+            elif u.date_joined >= thirty_days_ago:
+                status_label = "Newly Joined"
+            else:
+                status_label = "Active"
+                
+            data.append({
+                "id": u.id,
+                "name": u.full_name or "User",
+                "email": u.email,
+                "image": u.avatar.url if u.avatar else "user-1.jpg",
+                "date": u.date_joined.strftime("%b %d, %Y") if u.date_joined else "N/A",
+                "deals": u.deals_count,
+                "happyHours": u.happy_hours_count,
+                "status": status_label,
+            })
+            
+        return Response({"success": True, "data": data})
+
+
+class AdminUserDeleteView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def delete(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="user")
+            user.delete()
+            return Response({"success": True, "message": "User deleted successfully."})
+        except User.DoesNotExist:
+            return Response({"success": False, "message": "User not found."}, status=404)
+
+
+class AdminUserSuspendView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="user")
+            user.is_suspended = not user.is_suspended
+            user.save()
+            status_text = "suspended" if user.is_suspended else "activated"
+            return Response({
+                "success": True,
+                "message": f"User {status_text} successfully.",
+                "is_suspended": user.is_suspended
+            })
+        except User.DoesNotExist:
+            return Response({"success": False, "message": "User not found."}, status=404)
+
+
+class AdminUserDetailView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="user")
+            
+            # Fetch user's deals
+            deals = []
+            for deal in user.submitted_deals.all().order_by("-created_at"):
+                status_label = "Approved" if deal.status == "active" else deal.status.capitalize()
+                deals.append({
+                    "title": deal.title,
+                    "restaurant": deal.restaurant.name if deal.restaurant else None,
+                    "date": deal.created_at.strftime("%b %d, %Y") if deal.created_at else "N/A",
+                    "status": status_label,
+                })
+
+            # Fetch user's happy hours
+            happy_hours = []
+            for hh in user.planned_happy_hours.all().order_by("-created_at"):
+                map_status = {
+                    "active": "Active",
+                    "upcoming": "Upcoming",
+                    "pending": "Pending",
+                    "rejected": "Rejected",
+                    "cancelled": "Cancelled",
+                    "draft": "Draft",
+                    "expired": "Expired",
+                }
+                status_label = map_status.get(hh.status, hh.status.capitalize())
+                
+                start = hh.start_time.strftime("%I:%M %p") if hh.start_time else ""
+                end = hh.end_time.strftime("%I:%M %p") if hh.end_time else ""
+                time_slot = f"{start} - {end}" if start and end else "N/A"
+                
+                happy_hours.append({
+                    "title": hh.title,
+                    "location": hh.location or hh.restaurant.address or "N/A",
+                    "date": hh.date.strftime("%b %d, %Y") if hh.date else "N/A",
+                    "time": time_slot,
+                    "status": status_label,
+                })
+
+            total_approved_deals = user.submitted_deals.filter(status="active").count()
+            total_approved_happy_hours = user.planned_happy_hours.filter(status="active").count()
+            total_approved = total_approved_deals + total_approved_happy_hours
+
+            data = {
+                "id": user.id,
+                "name": user.full_name or "User",
+                "email": user.email,
+                "phone": user.phone_number or "-",
+                "image_url": user.avatar.url if user.avatar else None,   
+                "joined": user.date_joined.strftime("%b %d, %Y") if user.date_joined else "N/A",
+                "totalPoints": user.points,
+                "dealsSubmitted": user.submitted_deals.count(),
+                "happyHours": user.planned_happy_hours.count(),
+                "totalApproved": total_approved,
+                "deals": deals,
+                "happyHoursList": happy_hours,
+                "is_suspended": user.is_suspended,
+            }
+            return Response({"success": True, "data": data})
+        except User.DoesNotExist:
+            return Response({"success": False, "message": "User not found."}, status=404)
+

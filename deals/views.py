@@ -1,3 +1,4 @@
+from django.db import IntegrityError
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -20,6 +21,7 @@ from .serializers import (
 
 from django.utils import timezone
 from datetime import timedelta
+from notifications.utils import create_notification, notify_admins
 
 
 # PUBLIC
@@ -213,6 +215,22 @@ class SubmitDealView(APIView):
             status="pending",
         )
 
+        notify_admins(
+            type="deal",
+            title="New Deal Submitted",
+            message=f"A new deal '{deal.title}' has been submitted for approval.",
+            related_deal=deal,
+        )
+
+        if restaurant.owner:
+            create_notification(
+                user=restaurant.owner,
+                type="deal",
+                title="New Deal Submitted",
+                message=f"A customer has submitted a new deal '{deal.title}' for your restaurant. It is pending admin approval.",
+                related_deal=deal,
+            )
+
         response_serializer = DealDetailSerializer(
             deal,
             context={"request": request},
@@ -390,6 +408,13 @@ class RestaurantCreateDealView(APIView):
             status="pending",
         )
 
+        notify_admins(
+            type="deal",
+            title="New Deal Submitted",
+            message=f"A new deal '{deal.title}' has been submitted for approval.",
+            related_deal=deal,
+        )
+
         return Response(
             {
                 "success": True,
@@ -436,6 +461,13 @@ class RestaurantUpdateDeleteDealView(APIView):
 
         if serializer.is_valid():
             serializer.save(status="pending", rejection_reason="")
+
+            notify_admins(
+                type="deal",
+                title="New Deal Submitted",
+                message=f"A new deal '{deal.title}' has been submitted for approval.",
+                related_deal=deal,
+            )
 
             return Response({
                 "success": True,
@@ -555,6 +587,10 @@ class AdminDealListView(APIView):
         if food_type:
             qs = qs.filter(food_type=food_type)
 
+        restaurant = request.query_params.get("restaurant")
+        if restaurant:
+            qs = qs.filter(restaurant_id=restaurant)
+
         serializer = DealListSerializer(qs, many=True, context={"request": request})
 
         return Response({
@@ -580,29 +616,27 @@ class AdminApproveDealView(APIView):
         deal.rejection_reason = ""
         deal.save(update_fields=["status", "rejection_reason"])
 
-        self._notify(deal)
-
-        return Response({
-            "success": True,
-            "message": f"Deal '{deal.title}' approved",
-        })
-
-    def _notify(self, deal):
-        if not deal.submitted_by:
-            return
-
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
+        if deal.submitted_by:
+            create_notification(
                 user=deal.submitted_by,
                 type="deal",
                 title="Deal Approved! 🎉",
                 message=f"Your deal '{deal.title}' has been approved.",
                 related_deal=deal,
             )
-        except Exception:
-            pass
+        if deal.restaurant.owner and deal.restaurant.owner != deal.submitted_by:
+            create_notification(
+                user=deal.restaurant.owner,
+                type="deal",
+                title="Deal Approved! 🎉",
+                message=f"Your deal '{deal.title}' has been approved.",
+                related_deal=deal,
+            )
+
+        return Response({
+            "success": True,
+            "message": f"Deal '{deal.title}' approved",
+        })
         
 class AdminToggleHotDealView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
@@ -650,29 +684,27 @@ class AdminRejectDealView(APIView):
         deal.rejection_reason = serializer.validated_data["rejection_reason"]
         deal.save(update_fields=["status", "rejection_reason"])
 
-        self._notify(deal)
-
-        return Response({
-            "success": True,
-            "message": f"Deal '{deal.title}' rejected",
-        })
-
-    def _notify(self, deal):
-        if not deal.submitted_by:
-            return
-
-        try:
-            from notifications.models import Notification
-
-            Notification.objects.create(
+        if deal.submitted_by:
+            create_notification(
                 user=deal.submitted_by,
                 type="deal",
                 title="Deal Rejected",
                 message=f"Your deal '{deal.title}' was rejected. Reason: {deal.rejection_reason}",
                 related_deal=deal,
             )
-        except Exception:
-            pass
+        if deal.restaurant.owner and deal.restaurant.owner != deal.submitted_by:
+            create_notification(
+                user=deal.restaurant.owner,
+                type="deal",
+                title="Deal Rejected",
+                message=f"Your deal '{deal.title}' was rejected. Reason: {deal.rejection_reason}",
+                related_deal=deal,
+            )
+
+        return Response({
+            "success": True,
+            "message": f"Deal '{deal.title}' rejected",
+        })
 
 
 class AdminAcceptAllDealsView(APIView):
