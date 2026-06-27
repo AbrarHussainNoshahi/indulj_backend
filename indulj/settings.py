@@ -31,7 +31,6 @@ INSTALLED_APPS = [
     'django_filters',
     'cloudinary',
     'cloudinary_storage',
-    'django_extensions',
 
     # Our apps
     'accounts',
