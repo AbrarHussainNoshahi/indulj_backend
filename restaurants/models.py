@@ -28,8 +28,19 @@ class Restaurant(models.Model):
     address = models.CharField(max_length=500)
     city = models.CharField(max_length=100, blank=True)
 
-    latitude = models.FloatField(null=True, blank=True)
-    longitude = models.FloatField(null=True, blank=True)
+    latitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
+
+    longitude = models.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        null=True,
+        blank=True,
+    )
 
     phone = models.CharField(max_length=20, blank=True)
     email = models.EmailField(blank=True)
@@ -58,10 +69,11 @@ class Restaurant(models.Model):
     def update_rating(self):
         from django.db.models import Avg
 
-        avg = self.reviews.aggregate(avg=Avg("rating"))["avg"]
+        reviews = self.reviews.filter(is_hidden=False)
+        avg_rating = reviews.aggregate(avg=Avg("rating"))["avg"] or 0
 
-        self.rating = round(avg, 1) if avg else 0.0
-        self.total_reviews = self.reviews.count()
+        self.rating = round(avg_rating, 1)
+        self.total_reviews = reviews.count()
         self.save(update_fields=["rating", "total_reviews"])
 
 
@@ -106,6 +118,9 @@ class Review(models.Model):
 
     restaurant_response = models.TextField(blank=True)
     restaurant_response_date = models.DateTimeField(null=True, blank=True)
+    is_hidden = models.BooleanField(default=False)
+    is_flagged = models.BooleanField(default=False)
+    flagged_reason = models.TextField(blank=True, default="")
 
     created_at = models.DateTimeField(auto_now_add=True)
 

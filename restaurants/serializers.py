@@ -60,13 +60,13 @@ class ReviewSerializer(serializers.ModelSerializer):
         return None
 
 
-class AddReviewSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Review
-        fields = [
-            "rating",
-            "comment",
-        ]
+# class AddReviewSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Review
+#         fields = [
+#             "rating",
+#             "comment",
+#         ]
 
 
 class RespondReviewSerializer(serializers.Serializer):
@@ -186,12 +186,50 @@ class CreateRestaurantSerializer(serializers.Serializer):
     location = serializers.CharField()
     city = serializers.CharField(required=False, default="", allow_blank=True)
     description = serializers.CharField(required=False, default="", allow_blank=True)
+    latitude = serializers.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        required=True,
+    )
 
+    longitude = serializers.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        required=True,
+    )
+    
     categories = serializers.ListField(
         child=serializers.CharField(),
         required=False,
         default=list,
     )
+    
+    def validate(self, attrs):
+        latitude = attrs.get("latitude")
+        longitude = attrs.get("longitude")
+
+        if latitude is None or longitude is None:
+            raise serializers.ValidationError(
+                {
+                    "location": "Please mark the restaurant location on the map."
+                }
+            )
+
+        if not (-90 <= float(latitude) <= 90):
+            raise serializers.ValidationError(
+                {
+                    "latitude": "Latitude must be between -90 and 90."
+                }
+            )
+
+        if not (-180 <= float(longitude) <= 180):
+            raise serializers.ValidationError(
+                {
+                    "longitude": "Longitude must be between -180 and 180."
+                }
+            )
+
+        return attrs
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
@@ -275,3 +313,151 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
         owner.save()
 
         return super().update(instance, validated_data)
+    
+from django.utils.timesince import timesince
+from django.utils import timezone
+
+
+class ReviewSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    user_avatar_url = serializers.SerializerMethodField()
+    restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
+    time_ago = serializers.SerializerMethodField()
+    can_edit = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Review
+        fields = [
+            "id",
+            "restaurant",
+            "restaurant_name",
+            "user",
+            "user_name",
+            "user_email",
+            "user_avatar_url",
+            "rating",
+            "comment",
+            "helpful_count",
+            "restaurant_response",
+            "restaurant_response_date",
+            "is_hidden",
+            "is_flagged",
+            "flagged_reason",
+            "created_at",
+            "time_ago",
+            "can_edit",
+        ]
+
+        read_only_fields = [
+            "id",
+            "restaurant",
+            "user",
+            "helpful_count",
+            "restaurant_response",
+            "restaurant_response_date",
+            "is_hidden",
+            "is_flagged",
+            "flagged_reason",
+            "created_at",
+        ]
+
+    def get_user_name(self, obj):
+        return obj.user.full_name or obj.user.email
+
+    def get_user_avatar_url(self, obj):
+        request = self.context.get("request")
+
+        if obj.user.avatar and request:
+            return request.build_absolute_uri(obj.user.avatar.url)
+
+        if obj.user.avatar:
+            return obj.user.avatar.url
+
+        return None
+
+    def get_time_ago(self, obj):
+        from django.utils.timesince import timesince
+        from django.utils import timezone
+
+        return f"{timesince(obj.created_at, timezone.now())} ago"
+
+    def get_can_edit(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+
+        return bool(user and user.is_authenticated and obj.user_id == user.id)
+
+class AddReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Review
+        fields = [
+            "rating",
+            "comment",
+        ]
+
+    def validate_rating(self, value):
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5.")
+
+        return value
+
+
+class EditReviewSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Review
+        fields = [
+            "rating",
+            "comment",
+        ]
+
+    def validate_rating(self, value):
+        if value < 1 or value > 5:
+            raise serializers.ValidationError("Rating must be between 1 and 5.")
+
+        return value
+
+
+class ReviewResponseSerializer(serializers.Serializer):
+    response = serializers.CharField(required=True, allow_blank=False)
+
+
+class FlagReviewSerializer(serializers.Serializer):
+    reason = serializers.CharField(required=True, allow_blank=False)
+
+
+class AdminReviewSerializer(serializers.ModelSerializer):
+    user_name = serializers.SerializerMethodField()
+    user_email = serializers.EmailField(source="user.email", read_only=True)
+    restaurant_name = serializers.CharField(source="restaurant.name", read_only=True)
+    time_ago = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Review
+        fields = [
+            "id",
+            "rating",
+            "comment",
+            "user",
+            "user_name",
+            "user_email",
+            "restaurant",
+            "restaurant_name",
+            "helpful_count",
+            "restaurant_response",
+            "restaurant_response_date",
+            "is_hidden",
+            "is_flagged",
+            "flagged_reason",
+            "created_at",
+            "time_ago",
+        ]
+
+    def get_user_name(self, obj):
+        return obj.user.full_name or obj.user.email
+
+    def get_time_ago(self, obj):
+        from django.utils.timesince import timesince
+        from django.utils import timezone
+
+        return f"{timesince(obj.created_at, timezone.now())} ago"
