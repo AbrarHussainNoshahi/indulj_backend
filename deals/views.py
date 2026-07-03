@@ -198,6 +198,17 @@ class SubmitDealView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Check if restaurant operating hours are set
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "This restaurant has not configured its operating hours yet. Deals cannot be created for it."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         deal = Deal.objects.create(
             restaurant=restaurant,
             submitted_by=request.user,
@@ -393,6 +404,17 @@ class RestaurantCreateDealView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Please set your restaurant's operating hours in your profile settings before creating a deal."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = CreateDealSerializer(data=request.data)
 
         if not serializer.is_valid():
@@ -534,6 +556,17 @@ class AdminCreateDealView(APIView):
                     "message": f"Restaurant '{data['restaurant_name']}' not found or not active.",
                 },
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Check if restaurant operating hours are set
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Restaurant '{restaurant.name}' has not configured its operating hours yet. Deals cannot be created for it."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         deal = Deal.objects.create(
