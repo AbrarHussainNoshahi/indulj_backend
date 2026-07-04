@@ -37,6 +37,7 @@ def generate_otp():
 #     )
 def send_otp_email(to_email, otp_code):
     try:
+        print("sending mail.....")
         response = resend.Emails.send({
             "from": "INDULJ <onboarding@resend.dev>",
             "to": [to_email],
