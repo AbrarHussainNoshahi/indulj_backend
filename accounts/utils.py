@@ -35,41 +35,41 @@ def generate_otp():
 #         [email],
 #         fail_silently=False,
 #     )
-def send_otp_email(to_email, otp_code):
-    try:
-        print("sending mail.....")
-        response = resend.Emails.send({
-            "from": "INDULJ <onboarding@resend.dev>",
-            "to": [to_email],
-            "subject": "Your OTP Code - INDULJ",
-            "html": f"""
-                <div style="font-family:Arial">
-                    <h2>INDULJ OTP Verification</h2>
-                    <p>Your OTP code is:</p>
-                    <h1 style="color:#ff4d4d">{otp_code}</h1>
-                    <p>This code will expire in 10 minutes.</p>
-                </div>
-            """
-        })
-
-        print("EMAIL SENT:", response)
-        return True
-
-    except Exception as e:
-        print("Resend Email Error:", e)
-        return False
-# def send_otp_email(email, otp):
+# def send_otp_email(to_email, otp_code):
 #     try:
-#         print("sending mail....")
-#         send_mail(
-#             subject="INDULJ OTP Code",
-#             message=f"Your OTP is {otp}",
-#             from_email=config("EMAIL_HOST_USER"),
-#             recipient_list=[email],
-#             fail_silently=False,
-#         )
+#         print("sending mail.....")
+#         response = resend.Emails.send({
+#             "from": "INDULJ <onboarding@resend.dev>",
+#             "to": [to_email],
+#             "subject": "Your OTP Code - INDULJ",
+#             "html": f"""
+#                 <div style="font-family:Arial">
+#                     <h2>INDULJ OTP Verification</h2>
+#                     <p>Your OTP code is:</p>
+#                     <h1 style="color:#ff4d4d">{otp_code}</h1>
+#                     <p>This code will expire in 10 minutes.</p>
+#                 </div>
+#             """
+#         })
+
+#         print("EMAIL SENT:", response)
+#         return True
+
 #     except Exception as e:
-#         logger.error(f"OTP email failed: {e}")
+#         print("Resend Email Error:", e)
+#         return False
+def send_otp_email(email, otp):
+    try:
+        print("sending mail....")
+        send_mail(
+            subject="INDULJ OTP Code",
+            message=f"Your OTP is {otp}",
+            from_email=config("EMAIL_HOST_USER"),
+            recipient_list=[email],
+            fail_silently=False,
+        )
+    except Exception as e:
+        logger.error(f"OTP email failed: {e}")
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
