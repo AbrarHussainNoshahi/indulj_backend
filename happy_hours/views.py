@@ -164,6 +164,17 @@ class PlanHappyHourView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "This restaurant has not configured its operating hours yet. Happy hours cannot be created for it."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         happy_hour = HappyHour.objects.create(
             restaurant=restaurant,
             submitted_by=request.user,
@@ -356,6 +367,17 @@ class RestaurantCreateHappyHourView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Please set your restaurant's operating hours in your profile settings before creating a happy hour."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = CreateHappyHourSerializer(data=request.data)
 
         if not serializer.is_valid():
@@ -413,6 +435,17 @@ class RestaurantUpdateDeleteHappyHourView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        operating_hours = happy_hour.restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Please set your restaurant's operating hours in your profile settings before creating/updating a happy hour."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = CreateHappyHourSerializer(
             happy_hour,
             data=request.data,
@@ -467,6 +500,17 @@ class RestaurantAcceptHappyHourView(APIView):
             return Response(
                 {"success": False, "message": "Happy hour not found or not pending"},
                 status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Check if restaurant operating hours are set
+        operating_hours = happy_hour.restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Please set your restaurant's operating hours in your profile settings before accepting a happy hour."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
         serializer = RestaurantResponseSerializer(data=request.data)
@@ -565,6 +609,17 @@ class RestaurantAcceptAllHappyHoursView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Please set your restaurant's operating hours in your profile settings before accepting happy hours."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         pending = HappyHour.objects.filter(
             restaurant=restaurant,
             status="pending",
@@ -652,6 +707,18 @@ class AdminHappyHourDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        restaurant = happy_hour.restaurant
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Restaurant '{restaurant.name}' has not configured its operating hours yet. Happy hours cannot be updated for it."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         serializer = AdminUpdateHappyHourSerializer(
             happy_hour,
             data=request.data,
@@ -701,6 +768,18 @@ class AdminAcceptHappyHourView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Check if restaurant operating hours are set
+        restaurant = happy_hour.restaurant
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Restaurant '{restaurant.name}' has not configured its operating hours yet. Happy hours cannot be approved for it."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         happy_hour.status = "upcoming"
         happy_hour.accepted_at = timezone.now()
         happy_hour.rejection_reason = ""
@@ -747,10 +826,17 @@ class AdminAcceptAllHappyHoursView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        pending = HappyHour.objects.filter(status="pending")
-        count = pending.count()
-
-        pending.update(status="upcoming", accepted_at=timezone.now())
+        pending = HappyHour.objects.filter(status="pending").select_related("restaurant")
+        count = 0
+        for hh in pending:
+            restaurant = hh.restaurant
+            operating_hours = restaurant.operating_hours
+            if operating_hours and isinstance(operating_hours, dict) and (operating_hours.get("open") or operating_hours.get("opening_time")) and (operating_hours.get("close") or operating_hours.get("closing_time")):
+                hh.status = "upcoming"
+                hh.accepted_at = timezone.now()
+                hh.rejection_reason = ""
+                hh.save(update_fields=["status", "accepted_at", "rejection_reason"])
+                count += 1
 
         return Response({
             "success": True,
