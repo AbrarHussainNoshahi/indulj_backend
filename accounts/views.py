@@ -172,9 +172,9 @@ class ResendOTPView(APIView):
             "success": True,
             "message": "New OTP sent",
         }
-
-        if settings.DEBUG:
-            response_data["dev_otp"] = otp
+        response_data["dev_otp"] = otp
+        # if settings.DEBUG:
+        #     response_data["dev_otp"] = otp
 
         return Response(response_data)
         # return Response({'success': True, 'message': 'New OTP sent'})
