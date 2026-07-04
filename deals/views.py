@@ -35,6 +35,10 @@ class PublicDealListView(APIView):
             restaurant__status="active",
         ).select_related("restaurant", "submitted_by")
 
+        restaurant_id = request.query_params.get("restaurant")
+        if restaurant_id:
+            qs = qs.filter(restaurant_id=restaurant_id)
+
         food_type = request.query_params.get("food_type")
         if food_type:
             qs = qs.filter(food_type=food_type)
@@ -648,6 +652,18 @@ class AdminApproveDealView(APIView):
         deal.status = "active"
         deal.rejection_reason = ""
         deal.save(update_fields=["status", "rejection_reason"])
+
+        if deal.submitted_by:
+            from accounts.models import PointsTransaction
+            submitter = deal.submitted_by
+            submitter.points += 50
+            submitter.save(update_fields=["points"])
+            PointsTransaction.objects.create(
+                user=submitter,
+                text=f"Deal submitted - {deal.title}",
+                status="approved",
+                points=50
+            )
 
         if deal.submitted_by:
             create_notification(

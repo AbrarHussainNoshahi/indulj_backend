@@ -97,8 +97,40 @@ class VerifyOTPView(APIView):
 
         otp_obj.is_used = True
         otp_obj.save()
-        user.is_email_verified = True
-        user.save()
+
+        if not user.is_email_verified:
+            user.is_email_verified = True
+            user.save(update_fields=["is_email_verified"])
+
+            if user.referred_by_code:
+                from .models import Referral, PointsTransaction
+                try:
+                    referrer = User.objects.get(referral_code=user.referred_by_code)
+                    if not Referral.objects.filter(referred_user=user).exists():
+                        Referral.objects.create(referrer=referrer, referred_user=user)
+                        referrer.points += 100
+                        referrer.save(update_fields=["points"])
+                        PointsTransaction.objects.create(
+                            user=referrer,
+                            text=f"Referral bonus - {user.full_name or user.email} joined",
+                            status="approved",
+                            points=100
+                        )
+                        # Notify referrer
+                        try:
+                            from notifications.utils import create_notification
+                            create_notification(
+                                user=referrer,
+                                type="system",
+                                title="New Referral Signup! 🎉",
+                                message=f"{user.full_name or user.email} joined Indulj using your referral code! You earned 100 points.",
+                            )
+                        except Exception:
+                            pass
+                except User.DoesNotExist:
+                    pass
+        else:
+            user.save()
 
         tokens   = get_tokens_for_user(user)
         response = Response({
@@ -636,4 +668,185 @@ class AdminUserDetailView(APIView):
             return Response({"success": True, "data": data})
         except User.DoesNotExist:
             return Response({"success": False, "message": "User not found."}, status=404)
+
+
+# ─── REWARDS & POINTS ──────────────────────────────────────────
+from .models import Referral, PointsTransaction, ReceiptScan
+from .serializers import PointsTransactionSerializer, ReceiptScanSerializer, ReferralSerializer
+from accounts.permissions import IsAdmin
+
+class PointsRewardsSummaryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        
+        # Successful referrals count
+        referrals_count = Referral.objects.filter(referrer=user).count()
+        referrals_points_earned = referrals_count * 100
+
+        # Submitted deals count (only active/approved ones can give points, but let's see how many deals are submitted)
+        deals_submitted_count = user.submitted_deals.filter(status="active").count()
+        deals_points_earned = deals_submitted_count * 50
+
+        # Receipts scanned count (approved/verified ones)
+        receipts_scanned_count = ReceiptScan.objects.filter(user=user, status="approved").count()
+        
+        # We can also compute total receipts scanned regardless of status for stats
+        total_receipts_scanned = ReceiptScan.objects.filter(user=user).count()
+
+        return Response({
+            "success": True,
+            "data": {
+                "total_points": user.points,
+                "referrals_count": referrals_count,
+                "referrals_points_earned": referrals_points_earned,
+                "deals_submitted_count": user.submitted_deals.count(),  # total submitted
+                "deals_approved_count": deals_submitted_count,          # approved count
+                "deals_points_earned": deals_points_earned,
+                "receipts_scanned_count": total_receipts_scanned,       # total scanned
+                "receipts_approved_count": receipts_scanned_count,      # approved scanned
+                "referral_code": user.referral_code,
+            }
+        })
+
+
+class PointsTransactionHistoryView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        transactions = PointsTransaction.objects.filter(user=request.user).order_by("-created_at")
+        serializer = PointsTransactionSerializer(transactions, many=True)
+        return Response({
+            "success": True,
+            "data": serializer.data
+        })
+
+
+class ReceiptScanUploadView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request):
+        scans = ReceiptScan.objects.filter(user=request.user).order_by("-uploaded_at")
+        serializer = ReceiptScanSerializer(scans, many=True)
+        return Response({
+            "success": True,
+            "data": serializer.data
+        })
+
+    def post(self, request):
+        serializer = ReceiptScanSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response({
+                "success": False,
+                "errors": serializer.errors
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Save receipt scan
+        scan = serializer.save(user=request.user, status="pending")
+
+        # Create pending PointsTransaction
+        rest_name = scan.restaurant.name if scan.restaurant else scan.restaurant_name
+        PointsTransaction.objects.create(
+            user=request.user,
+            text=f"Receipt scanned at {rest_name or 'Restaurant'}",
+            status="pending",
+            points=25
+        )
+
+        return Response({
+            "success": True,
+            "data": ReceiptScanSerializer(scan).data,
+            "message": "Receipt uploaded successfully and is pending review."
+        }, status=status.HTTP_201_CREATED)
+
+
+class AdminReceiptScanListView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def get(self, request):
+        scans = ReceiptScan.objects.all().order_by("-uploaded_at")
+        serializer = ReceiptScanSerializer(scans, many=True)
+        return Response({
+            "success": True,
+            "data": serializer.data
+        })
+
+
+class AdminVerifyReceiptScanView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            scan = ReceiptScan.objects.get(pk=pk)
+        except ReceiptScan.DoesNotExist:
+            return Response({
+                "success": False,
+                "message": "Receipt scan not found."
+            }, status=status.HTTP_404_NOT_FOUND)
+
+        new_status = request.data.get("status")
+        if new_status not in ["approved", "rejected"]:
+            return Response({
+                "success": False,
+                "message": "Invalid status. Must be 'approved' or 'rejected'."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if scan.status != "pending":
+            return Response({
+                "success": False,
+                "message": "Receipt scan is already processed."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        # Update scan
+        scan.status = new_status
+        scan.save(update_fields=["status"])
+
+        # Find the associated pending PointsTransaction
+        rest_name = scan.restaurant.name if scan.restaurant else scan.restaurant_name
+        # Match text pattern
+        text_prefix = f"Receipt scanned at {rest_name or 'Restaurant'}"
+        transaction = PointsTransaction.objects.filter(
+            user=scan.user,
+            text__startswith=text_prefix,
+            status="pending"
+        ).last()
+
+        if new_status == "approved":
+            # Add points to user
+            user = scan.user
+            user.points += 25
+            user.save(update_fields=["points"])
+
+            # Update transaction
+            if transaction:
+                transaction.status = "approved"
+                transaction.points = 25
+                transaction.save(update_fields=["status", "points"])
+            else:
+                PointsTransaction.objects.create(
+                    user=user,
+                    text=f"Receipt scanned at {rest_name or 'Restaurant'}",
+                    status="approved",
+                    points=25
+                )
+        else: # rejected
+            if transaction:
+                transaction.status = "rejected"
+                transaction.points = -25 # set to -25 to match frontend style
+                transaction.save(update_fields=["status", "points"])
+            else:
+                PointsTransaction.objects.create(
+                    user=scan.user,
+                    text=f"Receipt scanned at {rest_name or 'Restaurant'}",
+                    status="rejected",
+                    points=-25
+                )
+
+        return Response({
+            "success": True,
+            "message": f"Receipt scan status updated to {new_status}."
+        })
+
 

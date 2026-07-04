@@ -43,6 +43,7 @@ class User(AbstractUser):
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
     points = models.IntegerField(default=0)
     referral_code = models.CharField(max_length=20, unique=True, blank=True)
+    referred_by_code = models.CharField(max_length=20, blank=True, null=True)
     is_email_verified = models.BooleanField(default=False)
     is_suspended = models.BooleanField(default=False)
     location = models.CharField(max_length=255, blank=True)
@@ -111,3 +112,51 @@ class UserSession(models.Model):
     last_active = models.DateTimeField(auto_now=True)
     is_current = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Referral(models.Model):
+    referrer = models.ForeignKey(User, on_delete=models.CASCADE, related_name="referrals_made")
+    referred_user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="referral_received")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.referrer.email} referred {self.referred_user.email}"
+
+
+class PointsTransaction(models.Model):
+    STATUS_CHOICES = [
+        ("approved", "Approved"),
+        ("pending", "Pending"),
+        ("rejected", "Rejected"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="points_transactions")
+    text = models.CharField(max_length=255)
+    date = models.DateField(auto_now_add=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    points = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return f"{self.user.email} - {self.points} pts ({self.status})"
+
+
+class ReceiptScan(models.Model):
+    STATUS_CHOICES = [
+        ("approved", "Approved"),
+        ("pending", "Pending"),
+        ("rejected", "Rejected"),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="receipt_scans")
+    restaurant = models.ForeignKey('restaurants.Restaurant', on_delete=models.SET_NULL, null=True, blank=True, related_name="receipt_scans")
+    restaurant_name = models.CharField(max_length=255, blank=True)
+    receipt_image = models.ImageField(upload_to="receipts/")
+    amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    receipt_date = models.DateField(null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="pending")
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        rest = self.restaurant.name if self.restaurant else self.restaurant_name
+        return f"Receipt by {self.user.email} at {rest} - {self.status}"

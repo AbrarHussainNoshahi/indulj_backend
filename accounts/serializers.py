@@ -1,10 +1,11 @@
 from rest_framework import serializers
-from .models import User, NotificationPreference, UserSession
+from .models import User, NotificationPreference, UserSession, Referral, PointsTransaction, ReceiptScan
 
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=6)
     confirm_password = serializers.CharField(write_only=True)
+    referral_code = serializers.CharField(required=False, write_only=True, allow_blank=True)
 
     class Meta:
         model = User
@@ -14,12 +15,19 @@ class RegisterSerializer(serializers.ModelSerializer):
             "phone_number",
             "password",
             "confirm_password",
+            "referral_code",
         ]
 
     def validate_email(self, value):
         if User.objects.filter(email=value).exists():
             raise serializers.ValidationError("Email already registered")
 
+        return value
+
+    def validate_referral_code(self, value):
+        if value:
+            if not User.objects.filter(referral_code=value).exists():
+                raise serializers.ValidationError("Invalid referral code. Submitter code does not exist.")
         return value
 
     def validate(self, data):
@@ -32,12 +40,14 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop("confirm_password")
+        referral_code = validated_data.pop("referral_code", None)
 
         user = User.objects.create_user(
             email=validated_data["email"],
             password=validated_data["password"],
             full_name=validated_data.get("full_name", ""),
             phone_number=validated_data.get("phone_number", ""),
+            referred_by_code=referral_code,
         )
 
         NotificationPreference.objects.create(user=user)
@@ -156,3 +166,42 @@ class UserSessionSerializer(serializers.ModelSerializer):
             "last_active",
             "is_current",
         ]
+
+
+class PointsTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PointsTransaction
+        fields = ["id", "text", "date", "status", "points", "created_at"]
+
+
+class ReceiptScanSerializer(serializers.ModelSerializer):
+    restaurant_name_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ReceiptScan
+        fields = [
+            "id",
+            "restaurant",
+            "restaurant_name",
+            "restaurant_name_display",
+            "receipt_image",
+            "amount",
+            "receipt_date",
+            "status",
+            "uploaded_at",
+        ]
+        read_only_fields = ["status", "uploaded_at"]
+
+    def get_restaurant_name_display(self, obj):
+        if obj.restaurant:
+            return obj.restaurant.name
+        return obj.restaurant_name
+
+
+class ReferralSerializer(serializers.ModelSerializer):
+    referrer_name = serializers.CharField(source="referrer.full_name", read_only=True)
+    referred_user_name = serializers.CharField(source="referred_user.full_name", read_only=True)
+
+    class Meta:
+        model = Referral
+        fields = ["id", "referrer", "referrer_name", "referred_user", "referred_user_name", "created_at"]

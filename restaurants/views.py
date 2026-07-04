@@ -440,13 +440,42 @@ class PublicRestaurantDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
+        # Retrieve active deals
+        from deals.models import Deal
+        from deals.serializers import DealListSerializer
+        deals = Deal.objects.filter(restaurant=restaurant, status="active")
+        deals_data = DealListSerializer(
+            deals,
+            many=True,
+            context={"request": request},
+        ).data
+
+        # Retrieve active and upcoming public happy hours
+        from happy_hours.models import HappyHour
+        from happy_hours.serializers import HappyHourListSerializer
+        happy_hours = HappyHour.objects.filter(
+            restaurant=restaurant,
+            status__in=["active", "upcoming"],
+            is_public=True,
+        )
+        happy_hours_data = HappyHourListSerializer(
+            happy_hours,
+            many=True,
+            context={"request": request},
+        ).data
+
+        data = RestaurantDetailSerializer(
+            restaurant,
+            context={"request": request},
+        ).data
+
+        data["deals"] = deals_data
+        data["happy_hours"] = happy_hours_data
+
         return Response(
             {
                 "success": True,
-                "data": RestaurantDetailSerializer(
-                    restaurant,
-                    context={"request": request},
-                ).data,
+                "data": data,
             }
         )
 

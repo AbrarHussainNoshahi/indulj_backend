@@ -32,6 +32,10 @@ class PublicHappyHourListView(APIView):
             restaurant__status="active",
         ).select_related("restaurant", "submitted_by")
 
+        restaurant_id = request.query_params.get("restaurant")
+        if restaurant_id:
+            qs = qs.filter(restaurant_id=restaurant_id)
+
         city = request.query_params.get("city")
         if city:
             qs = qs.filter(restaurant__city__icontains=city)

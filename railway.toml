@@ -1,0 +1,6 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "python manage.py migrate && python manage.py collectstatic --noinput && gunicorn indulj.wsgi:application --bind 0.0.0.0:$PORT --log-file -"
+restartPolicyType = "on_failure"

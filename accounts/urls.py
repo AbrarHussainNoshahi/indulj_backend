@@ -21,6 +21,11 @@ from .views import (
     AdminUserDeleteView,
     AdminUserSuspendView,
     AdminUserDetailView,
+    PointsRewardsSummaryView,
+    PointsTransactionHistoryView,
+    ReceiptScanUploadView,
+    AdminReceiptScanListView,
+    AdminVerifyReceiptScanView,
 )
 
 urlpatterns = [
@@ -41,6 +46,13 @@ urlpatterns = [
     path("change-password/", ChangePasswordView.as_view()),
     path("delete-account/", DeleteAccountView.as_view()),
     path("referral-code/", ReferralCodeView.as_view()),
+
+    # Rewards & Points
+    path("rewards/summary/", PointsRewardsSummaryView.as_view()),
+    path("rewards/history/", PointsTransactionHistoryView.as_view()),
+    path("rewards/receipts/", ReceiptScanUploadView.as_view()),
+    path("admin/receipts/", AdminReceiptScanListView.as_view()),
+    path("admin/receipts/<int:pk>/verify/", AdminVerifyReceiptScanView.as_view()),
 
     # Settings
     path("2fa/toggle/", ToggleTwoFactorView.as_view()),
