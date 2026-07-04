@@ -34,6 +34,7 @@ def generate_otp():
 
 def send_otp_email(email, otp):
     try:
+        print("sending mail....")
         send_mail(
             subject="INDULJ OTP Code",
             message=f"Your OTP is {otp}",
