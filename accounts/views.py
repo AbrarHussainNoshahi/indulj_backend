@@ -57,8 +57,9 @@ class RegisterView(APIView):
             "message": "OTP sent to your email.",
             "email": user.email,
         }
-        if settings.DEBUG:
-            response_data["dev_otp"] = otp
+        response_data["dev_otp"] = otp
+        # if settings.DEBUG:
+        #     response_data["dev_otp"] = otp
         return Response(response_data, status=status.HTTP_201_CREATED)
         # return Response({
         #     'success': True,
