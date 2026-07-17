@@ -106,12 +106,26 @@ class NotificationPreference(models.Model):
 
 
 class UserSession(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="sessions")
-    device_info = models.CharField(max_length=255)
-    location = models.CharField(max_length=255, blank=True)
+    user        = models.ForeignKey(
+                      User, on_delete=models.CASCADE,
+                      related_name='sessions'
+                  )
+    session_key = models.CharField(max_length=100, unique=True, null=True, blank=True)
+    device_info = models.CharField(max_length=255, blank=True)
+    browser     = models.CharField(max_length=100, blank=True)
+    os          = models.CharField(max_length=100, blank=True)
+    ip_address  = models.GenericIPAddressField(null=True, blank=True)
+    location    = models.CharField(max_length=255, blank=True)
+    is_current  = models.BooleanField(default=False)
+    is_revoked  = models.BooleanField(default=False)
     last_active = models.DateTimeField(auto_now=True)
-    is_current = models.BooleanField(default=False)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at  = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-last_active']
+
+    def __str__(self):
+        return f"{self.user.email} — {self.browser} on {self.os}"
 
 
 class Referral(models.Model):

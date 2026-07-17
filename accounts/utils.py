@@ -79,6 +79,19 @@ def get_tokens_for_user(user):
     }
 
 
+def get_tokens_for_user_with_session(user, session_key):
+    """
+    Generate JWT tokens with session_key baked in.
+    Use this instead of get_tokens_for_user() everywhere.
+    """
+    from accounts.tokens import SessionRefreshToken
+    refresh = SessionRefreshToken.for_user_with_session(user, session_key)
+    return {
+        'refresh': str(refresh),
+        'access':  str(refresh.access_token),
+    }
+
+
 def set_auth_cookies(response, access_token, refresh_token):
     is_secure = settings.SIMPLE_JWT.get('AUTH_COOKIE_SECURE', True)
     samesite  = settings.SIMPLE_JWT.get('AUTH_COOKIE_SAMESITE', 'None')

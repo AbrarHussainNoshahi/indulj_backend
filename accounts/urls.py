@@ -13,6 +13,8 @@ from .views import (
     NotificationPreferenceView,
     SessionListView,
     SessionRevokeView,
+    RevokeAllSessionsView,
+    SessionCheckView,
     ReferralCodeView,
     RemoveAvatarView,
     ToggleTwoFactorView,
@@ -57,7 +59,9 @@ urlpatterns = [
     # Settings
     path("2fa/toggle/", ToggleTwoFactorView.as_view()),
     path("notification-prefs/", NotificationPreferenceView.as_view()),
+    path("session/check/", SessionCheckView.as_view()),
     path("sessions/", SessionListView.as_view()),
+    path("sessions/revoke-all/", RevokeAllSessionsView.as_view()),
     path("sessions/<int:session_id>/revoke/", SessionRevokeView.as_view()),
 
     # Admin User Management

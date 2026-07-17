@@ -20,8 +20,9 @@ from .serializers import (
 )
 from .utils import (
     clear_auth_cookies, generate_otp, get_tokens_for_user,
-    send_otp_email, set_auth_cookies,
+    send_otp_email, set_auth_cookies, get_tokens_for_user_with_session,
 )
+from .session_utils import create_session
 
 
 def make_user_data(user, request=None):
@@ -133,7 +134,8 @@ class VerifyOTPView(APIView):
         else:
             user.save()
 
-        tokens   = get_tokens_for_user(user)
+        session, session_key = create_session(user, request)
+        tokens   = get_tokens_for_user_with_session(user, session_key)
         response = Response({
             **make_user_data(user, request),
             'message': 'Email verified successfully',
@@ -211,7 +213,8 @@ class LoginView(APIView):
                 status=403
             )
 
-        tokens   = get_tokens_for_user(user)
+        session, session_key = create_session(user, request)
+        tokens   = get_tokens_for_user_with_session(user, session_key)
         response = Response({
             **make_user_data(user, request),
             'message': 'Login successful',
@@ -290,7 +293,8 @@ class GoogleAuthView(APIView):
         if created:
             NotificationPreference.objects.create(user=user)
 
-        tokens = get_tokens_for_user(user)
+        session, session_key = create_session(user, request)
+        tokens = get_tokens_for_user_with_session(user, session_key)
 
         response = Response({
             **make_user_data(user, request),
@@ -310,8 +314,27 @@ class LogoutView(APIView):
             refresh_token = request.COOKIES.get('refresh_token')
             if refresh_token:
                 RefreshToken(refresh_token).blacklist()
-        except TokenError:
+        except Exception:
             pass
+
+        # Mark current session as revoked/inactive
+        try:
+            access_token = request.COOKIES.get('access_token')
+            if access_token:
+                from rest_framework_simplejwt.tokens import AccessToken
+                token       = AccessToken(access_token)
+                session_key = token.get('session_key')
+                if session_key:
+                    UserSession.objects.filter(
+                        user=request.user,
+                        session_key=session_key,
+                    ).update(is_current=False, is_revoked=True)
+        except Exception:
+            # fallback: mark all current sessions
+            UserSession.objects.filter(
+                user=request.user, is_current=True
+            ).update(is_current=False, is_revoked=True)
+
         response = Response({'success': True, 'message': 'Logged out'})
         clear_auth_cookies(response)
         return response
@@ -326,7 +349,16 @@ class CookieTokenRefreshView(APIView):
         if not refresh_token:
             return Response({'success': False, 'message': 'No refresh token'}, status=401)
         try:
-            refresh  = RefreshToken(refresh_token)
+            from accounts.tokens import SessionRefreshToken
+            refresh  = SessionRefreshToken(refresh_token)
+            
+            # Check if this session is revoked before issuing new tokens
+            session_key = refresh.get('session_key')
+            if session_key:
+                from accounts.models import UserSession
+                if UserSession.objects.filter(session_key=session_key, is_revoked=True).exists():
+                    return Response({'success': False, 'message': 'Session revoked'}, status=401)
+
             tokens   = {'access': str(refresh.access_token), 'refresh': str(refresh)}
             response = Response({'success': True})
             set_auth_cookies(response, tokens['access'], tokens['refresh'])
@@ -424,8 +456,17 @@ class SessionListView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        sessions = UserSession.objects.filter(user=request.user).order_by('-last_active')
-        return Response({'success': True, 'data': UserSessionSerializer(sessions, many=True).data})
+        # Only show non-revoked sessions
+        sessions = UserSession.objects.filter(
+            user=request.user,
+            is_revoked=False,
+        ).order_by('-is_current', '-last_active')
+
+        return Response({
+            'success': True,
+            'count':   sessions.count(),
+            'data':    UserSessionSerializer(sessions, many=True).data,
+        })
 
 
 class SessionRevokeView(APIView):
@@ -433,11 +474,67 @@ class SessionRevokeView(APIView):
 
     def delete(self, request, session_id):
         try:
-            session = UserSession.objects.get(id=session_id, user=request.user)
-            session.delete()
-            return Response({'success': True, 'message': 'Session revoked'})
+            session = UserSession.objects.get(
+                id=session_id,
+                user=request.user,
+                is_revoked=False,
+            )
         except UserSession.DoesNotExist:
-            return Response({'success': False, 'message': 'Session not found'}, status=404)
+            return Response(
+                {'success': False, 'message': 'Session not found'},
+                status=404
+            )
+
+        if session.is_current:
+            return Response({
+                'success': False,
+                'message': 'Cannot revoke current session. Use logout instead.',
+            }, status=400)
+
+        # Mark as revoked — do NOT delete
+        # This lets the JWT check catch it and return 401
+        session.is_revoked = True
+        session.is_current = False
+        session.save()
+
+        return Response({
+            'success': True,
+            'message': 'Session revoked. That device will be logged out shortly.',
+        })
+
+
+class RevokeAllSessionsView(APIView):
+    """DELETE /api/auth/sessions/revoke-all/"""
+    permission_classes = [IsAuthenticated]
+
+    def delete(self, request):
+        # Revoke all sessions except current
+        updated = UserSession.objects.filter(
+            user=request.user,
+            is_current=False,
+            is_revoked=False,
+        ).update(is_revoked=True)
+
+        return Response({
+            'success': True,
+            'message': f'{updated} other session(s) revoked.',
+        })
+
+
+class SessionCheckView(APIView):
+    """
+    GET /api/auth/session/check/
+    Returns 200 if current session is valid.
+    Returns 401 if session was revoked (via CookieJWTAuthentication).
+    Frontend polls this to detect remote revocation.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            'success': True,
+            'valid':   True,
+        })
 
 
 # ─── REFERRAL CODE ──────────────────────────────────────────

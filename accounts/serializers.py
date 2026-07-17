@@ -157,15 +157,24 @@ class NotificationPreferenceSerializer(serializers.ModelSerializer):
 
 
 class UserSessionSerializer(serializers.ModelSerializer):
+    time_ago = serializers.SerializerMethodField()
+
     class Meta:
-        model = UserSession
+        model  = UserSession
         fields = [
-            "id",
-            "device_info",
-            "location",
-            "last_active",
-            "is_current",
+            'id', 'device_info', 'browser', 'os',
+            'ip_address', 'location',
+            'is_current', 'last_active',
+            'created_at', 'time_ago',
         ]
+
+    def get_time_ago(self, obj):
+        from django.utils.timesince import timesince
+        from django.utils import timezone
+        try:
+            return timesince(obj.last_active, timezone.now())
+        except Exception:
+            return "0 minutes"
 
 
 class PointsTransactionSerializer(serializers.ModelSerializer):
