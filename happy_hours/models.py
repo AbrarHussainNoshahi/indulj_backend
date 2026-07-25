@@ -35,6 +35,7 @@ class HappyHour(models.Model):
     CREATED_BY_CHOICES = [
         ("user", "User"),
         ("restaurant", "Restaurant"),
+        ("admin", "Admin"),
     ]
 
     restaurant = models.ForeignKey(

@@ -32,6 +32,13 @@ class AdminCreateDealSerializer(serializers.Serializer):
         default="active",
     )
 
+    post_to_happy_hour = serializers.BooleanField(required=False, default=False)
+    hh_date = serializers.DateField(required=False, allow_null=True)
+    hh_group_size = serializers.IntegerField(required=False, default=1)
+    hh_event_type = serializers.CharField(required=False, default="casual")
+    hh_vibe = serializers.CharField(required=False, default="casual")
+    hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
+
 
 # ─────────────────────────────────────────────
 # DEAL LIST (PUBLIC + ADMIN + RESTAURANT)

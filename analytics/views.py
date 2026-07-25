@@ -11,7 +11,7 @@ from rest_framework.views import APIView
 from accounts.models import User
 from accounts.permissions import IsAdmin, IsRestaurant, IsUser
 from restaurants.models import Restaurant
-from deals.models import Deal, SavedDeal
+from deals.models import Deal, SavedDeal, DealView
 from happy_hours.models import HappyHour
 from orders.models import Order
 from notifications.models import Notification
@@ -756,10 +756,21 @@ class RestaurantOptimizedDealsView(APIView):
 
 
 class RestaurantDealsPerformanceView(APIView):
-    permission_classes = [IsAuthenticated, IsRestaurant]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        restaurant = get_user_restaurant(request.user)
+        restaurant_id = request.query_params.get("restaurant") or request.query_params.get("restaurant_id")
+
+        if restaurant_id and (getattr(request.user, "role", None) == "admin" or request.user.is_staff):
+            try:
+                restaurant = Restaurant.objects.get(pk=restaurant_id)
+            except Restaurant.DoesNotExist:
+                return Response(
+                    {"success": False, "message": "Restaurant not found."},
+                    status=404,
+                )
+        else:
+            restaurant = get_user_restaurant(request.user)
 
         if not restaurant:
             return Response(
@@ -767,17 +778,56 @@ class RestaurantDealsPerformanceView(APIView):
                 status=404,
             )
 
-        deals = (
-            Deal.objects.filter(restaurant=restaurant)
-            .order_by("-views_count")[:7]
-        )
+        period = request.query_params.get("period", "monthly").lower()
+        date_str = request.query_params.get("date")
+
+        now = timezone.now()
+        target_date = None
+
+        if date_str:
+            try:
+                target_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            except ValueError:
+                target_date = now.date()
+
+        if period == "calendar" or (date_str and period not in ["daily", "monthly", "yearly"]):
+            t_date = target_date or now.date()
+            start_dt = timezone.make_aware(datetime.combine(t_date, time.min))
+            end_dt = timezone.make_aware(datetime.combine(t_date, time.max))
+        elif period == "daily":
+            t_date = target_date or now.date()
+            start_dt = timezone.make_aware(datetime.combine(t_date, time.min))
+            end_dt = timezone.make_aware(datetime.combine(t_date, time.max))
+        elif period == "yearly":
+            start_dt = now - timedelta(days=365)
+            end_dt = now
+        else:  # monthly
+            start_dt = now - timedelta(days=30)
+            end_dt = now
+
+        deals = Deal.objects.filter(restaurant=restaurant).order_by("-views_count")[:7]
 
         data = []
 
         for index, deal in enumerate(deals, 1):
-            views = deal.views_count or 0
-            redemptions = deal.redemptions_count or 0
-            total = views + redemptions or 1
+            views = DealView.objects.filter(
+                deal=deal,
+                created_at__range=(start_dt, end_dt),
+            ).count()
+
+            redemptions = Order.objects.filter(
+                deal=deal,
+                status="completed",
+                created_at__range=(start_dt, end_dt),
+            ).count()
+
+            # Fallback to cumulative deal counts if no granular logs exist for default monthly view
+            if views == 0 and redemptions == 0 and period == "monthly":
+                views = deal.views_count or 0
+                redemptions = deal.redemptions_count or 0
+
+            total = views + redemptions
+            performance = round((redemptions / total) * 100, 1) if total > 0 else 0
 
             data.append(
                 {
@@ -785,7 +835,7 @@ class RestaurantDealsPerformanceView(APIView):
                     "title": deal.title[:24],
                     "views": views,
                     "redemptions": redemptions,
-                    "performance": round((redemptions / total) * 100, 1),
+                    "performance": performance,
                 }
             )
 

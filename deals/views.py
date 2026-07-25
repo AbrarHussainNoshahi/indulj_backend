@@ -593,10 +593,86 @@ class AdminCreateDealView(APIView):
             status=data.get("status", "active"),
         )
 
+        post_to_happy_hour = data.get("post_to_happy_hour", False)
+        if post_to_happy_hour:
+            from happy_hours.models import HappyHour
+            from django.core.files.base import ContentFile
+            import datetime
+
+            s_time = data.get("start_time")
+            e_time = data.get("end_time")
+
+            if not s_time or not e_time:
+                op_hours = restaurant.operating_hours or {}
+                if not s_time:
+                    open_str = op_hours.get("open") or op_hours.get("opening_time")
+                    if open_str:
+                        try:
+                            s_time = datetime.datetime.strptime(str(open_str)[:5], "%H:%M").time()
+                        except Exception:
+                            s_time = datetime.time(12, 0)
+                    else:
+                        s_time = datetime.time(12, 0)
+
+                if not e_time:
+                    close_str = op_hours.get("close") or op_hours.get("closing_time")
+                    if close_str:
+                        try:
+                            e_time = datetime.datetime.strptime(str(close_str)[:5], "%H:%M").time()
+                        except Exception:
+                            e_time = datetime.time(23, 59)
+                    else:
+                        e_time = datetime.time(23, 59)
+
+            happy_hour_image = None
+            if deal.image:
+                try:
+                    deal.image.open()
+                    happy_hour_image = ContentFile(deal.image.read(), name=deal.image.name.split("/")[-1])
+                except Exception:
+                    happy_hour_image = None
+
+            hh_discount = data.get("hh_discount_offer")
+            if not hh_discount:
+                if data.get("discount_percentage"):
+                    hh_discount = f"{data['discount_percentage']}% OFF"
+                elif data.get("price"):
+                    hh_discount = f"${data['price']}"
+                else:
+                    hh_discount = ""
+
+            hh_event = data.get("hh_event_type", "casual").lower().replace(" ", "_")
+            if hh_event not in [c[0] for c in HappyHour.EVENT_TYPE_CHOICES]:
+                hh_event = "casual"
+
+            hh_vibe = data.get("hh_vibe", "casual").lower().replace(" ", "_")
+            if hh_vibe not in [c[0] for c in HappyHour.VIBE_CHOICES]:
+                hh_vibe = "casual"
+
+            HappyHour.objects.create(
+                restaurant=restaurant,
+                submitted_by=request.user,
+                created_by_role="admin",
+                title=data["title"],
+                description=data["description"],
+                group_size=data.get("hh_group_size", 1),
+                event_type=hh_event,
+                vibe=hh_vibe,
+                date=data.get("hh_date"),
+                start_time=s_time,
+                end_time=e_time,
+                days_of_week=[data["day_of_week"]] if data.get("day_of_week") else ["everyday"],
+                location=data.get("location_branch") or restaurant.address or restaurant.city or "",
+                discount_offer=hh_discount,
+                status="active" if data.get("status") == "active" else "upcoming",
+                is_public=True,
+                image=happy_hour_image,
+            )
+
         return Response(
             {
                 "success": True,
-                "message": "Deal created successfully.",
+                "message": "Deal created successfully." if not post_to_happy_hour else "Deal and Happy Hour created successfully.",
                 "data": DealListSerializer(
                     deal,
                     context={"request": request},
