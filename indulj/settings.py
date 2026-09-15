@@ -163,6 +163,12 @@ MEDIA_URL = "/media/"
 CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
+    "http://127.0.0.1:8100",
+    "http://localhost:8100",
+    "http://127.0.0.1:4200",
+    "http://localhost:4200",
+    "capacitor://localhost",
+    "http://localhost",
     "https://indulj.vercel.app",
     "https://indulj-v1.vercel.app",
 ]
@@ -182,10 +188,14 @@ CORS_EXPOSE_HEADERS = [
 CSRF_TRUSTED_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://localhost:5173",
+    "http://127.0.0.1:8100",
+    "http://localhost:8100",
+    "http://127.0.0.1:4200",
+    "http://localhost:4200",
+    "capacitor://localhost",
+    "http://localhost",
     "https://indulj.vercel.app",
     "https://indulj-v1.vercel.app",
-    "https://*.railway.app",
-    "https://*.up.railway.app",
 ]
 
 # HTTPS / proxy settings for Railway

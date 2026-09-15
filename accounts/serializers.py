@@ -123,7 +123,6 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = [
-            "full_name",
             "display_username",
             "phone_number",
             "location",

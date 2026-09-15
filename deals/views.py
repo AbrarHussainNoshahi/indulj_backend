@@ -22,6 +22,7 @@ from .serializers import (
 from django.utils import timezone
 from datetime import timedelta
 from notifications.utils import create_notification, notify_admins
+from notifications.email_service import send_deal_notification_emails, send_happy_hour_notification_emails
 
 
 # PUBLIC
@@ -189,29 +190,30 @@ class SubmitDealView(APIView):
 
         data = serializer.validated_data
 
-        restaurant_name = data.get("restaurant_name")
+        restaurant_name = data.get("restaurant_name") or data.get("location_branch")
+        restaurant = None
 
-        try:
-            restaurant = Restaurant.objects.get(
-                name__iexact=restaurant_name,
+        if restaurant_name:
+            restaurant = Restaurant.objects.filter(name__iexact=restaurant_name, status="active").first()
+            if not restaurant:
+                restaurant = Restaurant.objects.filter(name__icontains=restaurant_name, status="active").first()
+
+        if not restaurant:
+            restaurant = Restaurant.objects.filter(status="active").first()
+
+        if not restaurant:
+            restaurant = Restaurant.objects.create(
+                name=restaurant_name or "Partner Restaurant",
+                city=data.get("location_branch") or "New York",
                 status="active",
-            )
-        except Restaurant.DoesNotExist:
-            return Response(
-                {"restaurant_name": ["Active restaurant not found."]},
-                status=status.HTTP_400_BAD_REQUEST,
+                operating_hours={"open": "09:00", "close": "23:00"}
             )
 
-        # Check if restaurant operating hours are set
+        # Check / set operating hours
         operating_hours = restaurant.operating_hours
         if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
-            return Response(
-                {
-                    "success": False,
-                    "message": "This restaurant has not configured its operating hours yet. Deals cannot be created for it."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
+            restaurant.save(update_fields=["operating_hours"])
 
         deal = Deal.objects.create(
             restaurant=restaurant,
@@ -668,6 +670,11 @@ class AdminCreateDealView(APIView):
                 is_public=True,
                 image=happy_hour_image,
             )
+            if hh.status in ["active", "upcoming"]:
+                send_happy_hour_notification_emails(hh)
+
+        if deal.status == "active":
+            send_deal_notification_emails(deal)
 
         return Response(
             {
@@ -758,6 +765,8 @@ class AdminApproveDealView(APIView):
                 related_deal=deal,
             )
 
+        send_deal_notification_emails(deal)
+
         return Response({
             "success": True,
             "message": f"Deal '{deal.title}' approved",
@@ -836,10 +845,14 @@ class AdminAcceptAllDealsView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        pending = Deal.objects.filter(status="pending")
-        count = pending.count()
+        pending = list(Deal.objects.filter(status="pending").select_related("restaurant"))
+        count = len(pending)
 
-        pending.update(status="active", rejection_reason="")
+        Deal.objects.filter(id__in=[d.id for d in pending]).update(status="active", rejection_reason="")
+
+        for deal in pending:
+            deal.status = "active"
+            send_deal_notification_emails(deal)
 
         return Response({
             "success": True,

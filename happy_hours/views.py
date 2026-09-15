@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import status
 from notifications.utils import create_notification, notify_admins, check_and_expire_happy_hours
+from notifications.email_service import send_happy_hour_notification_emails
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -73,19 +74,38 @@ class PublicHappyHourDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, pk):
+        check_and_expire_happy_hours()
         try:
             happy_hour = HappyHour.objects.select_related(
                 "restaurant",
                 "submitted_by",
-            ).get(
-                pk=pk,
-                status__in=["active", "upcoming"],
-                is_public=True,
-                restaurant__status="active",
-            )
+            ).get(pk=pk)
         except HappyHour.DoesNotExist:
             return Response(
                 {"success": False, "message": "Happy hour not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Visible if active/upcoming & public & active restaurant,
+        # OR if requested by creator, restaurant owner, or admin
+        is_public_viewable = (
+            happy_hour.status in ["active", "upcoming"]
+            and happy_hour.is_public
+            and getattr(happy_hour.restaurant, "status", None) == "active"
+        )
+        is_authorized = (
+            request.user.is_authenticated
+            and (
+                happy_hour.submitted_by_id == request.user.id
+                or getattr(happy_hour.restaurant, "owner_id", None) == request.user.id
+                or getattr(request.user, "role", None) == "admin"
+                or request.user.is_staff
+            )
+        )
+
+        if not (is_public_viewable or is_authorized):
+            return Response(
+                {"success": False, "message": "Happy hour not found or awaiting approval."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
@@ -137,12 +157,11 @@ class MapHappyHoursView(APIView):
 
 
 class PlanHappyHourView(APIView):
-    permission_classes = [IsAuthenticated, IsUser]
+    permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         serializer = PlanHappyHourSerializer(data=request.data)
-        print("REQUEST DATA:", request.data)
         if not serializer.is_valid():
             return Response(
                 {
@@ -154,63 +173,100 @@ class PlanHappyHourView(APIView):
 
         data = serializer.validated_data
 
-        try:
-            restaurant = Restaurant.objects.get(
-                pk=data["restaurant"],
+        # Resolve restaurant
+        rest_input = data.get("restaurant") or data.get("restaurant_name") or data.get("location")
+        restaurant = None
+
+        if rest_input:
+            if str(rest_input).isdigit():
+                restaurant = Restaurant.objects.filter(pk=int(rest_input), status="active").first()
+            if not restaurant:
+                restaurant = Restaurant.objects.filter(name__icontains=str(rest_input), status="active").first()
+
+        if not restaurant:
+            restaurant = Restaurant.objects.filter(status="active").first()
+
+        if not restaurant:
+            restaurant = Restaurant.objects.create(
+                name=str(rest_input) if rest_input else "Partner Restaurant",
+                city=data.get("location") or "New York",
                 status="active",
-            )
-        except Restaurant.DoesNotExist:
-            return Response(
-                {
-                    "success": False,
-                    "message": "Restaurant not found",
-                },
-                status=status.HTTP_404_NOT_FOUND,
+                operating_hours={"open": "09:00", "close": "23:00"}
             )
 
-        # Check if restaurant operating hours are set
+        # Check / set operating hours
         operating_hours = restaurant.operating_hours
         if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
-            return Response(
-                {
-                    "success": False,
-                    "message": "This restaurant has not configured its operating hours yet. Happy hours cannot be created for it."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
+            restaurant.save(update_fields=["operating_hours"])
+
+        date_val = data.get("date") or timezone.localdate()
+        title_val = data.get("title") or f"{restaurant.name} Happy Hour"
+        start_time_val = data.get("start_time") or "17:00:00"
+        end_time_val = data.get("end_time") or "20:00:00"
 
         happy_hour = HappyHour.objects.create(
             restaurant=restaurant,
             submitted_by=request.user,
             created_by_role="user",
-
-            title=data["title"],
+            title=title_val,
             description=data.get("description", ""),
-
-            event_type=data["event_type"],
-            group_size=data["group_size"],
-
-            start_time=data["start_time"],
-            end_time=data["end_time"],
-            date=data["date"],
-
-            vibe=data["vibe"],
+            event_type=data.get("event_type", "casual"),
+            group_size=data.get("group_size", 1),
+            start_time=start_time_val,
+            end_time=end_time_val,
+            date=date_val,
+            vibe=data.get("vibe", "casual"),
             location=data.get("location", ""),
             phone_number=data.get("phone_number", ""),
-
-            is_public=data["is_public"],
+            is_public=data.get("is_public", True),
             image=data.get("image"),
             specials=data.get("specials", []),
-
             status="pending",
         )
 
-        self._notify_restaurant(happy_hour)
+        # Also create deal if requested
+        raw_also = request.data.get("also_add_to_deals")
+        also_add_deals = data.get("also_add_to_deals") or (raw_also in [True, "true", "True", "1", 1])
+
+        if also_add_deals:
+            try:
+                from deals.models import Deal
+                day_name = date_val.strftime("%A").lower() if hasattr(date_val, "strftime") else "everyday"
+                valid_days = [c[0] for c in Deal.DAY_CHOICES]
+                if day_name not in valid_days:
+                    day_name = "everyday"
+
+                price_val = data.get("price") or request.data.get("price") or 0.00
+                Deal.objects.create(
+                    restaurant=restaurant,
+                    submitted_by=request.user,
+                    created_by_role="user",
+                    title=f"{title_val}",
+                    description=data.get("description") or f"Happy Hour Special: {title_val}",
+                    food_type="other",
+                    price=price_val,
+                    day_of_week=day_name,
+                    has_time_slots=True,
+                    start_time=start_time_val,
+                    end_time=end_time_val,
+                    image=data.get("image"),
+                    location_branch=data.get("location", ""),
+                    status="pending",
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to auto-create deal from happy hour: {e}")
+
+        try:
+            self._notify_restaurant(happy_hour)
+        except Exception:
+            pass
 
         return Response(
             {
                 "success": True,
-                "message": "Happy hour planned! Restaurant has been notified.",
+                "message": "Happy hour planned! Restaurant has been notified." if not also_add_deals else "Happy hour and Deal created successfully! Restaurant has been notified.",
                 "data": HappyHourListSerializer(
                     happy_hour,
                     context={"request": request},
@@ -220,13 +276,22 @@ class PlanHappyHourView(APIView):
         )
 
     def _notify_restaurant(self, happy_hour):
-        create_notification(
-            user=happy_hour.restaurant.owner,
-            type="happy_hour",
-            title="New Happy Hour Request",
-            message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title} for {happy_hour.group_size} people.",
-            related_happy_hour=happy_hour,
-        )
+        if happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.submitted_by,
+                type="happy_hour",
+                title="Happy Hour Request Submitted",
+                message=f"Your request for '{happy_hour.title}' at {happy_hour.restaurant.name} has been submitted for review.",
+                related_happy_hour=happy_hour,
+            )
+        if happy_hour.restaurant and happy_hour.restaurant.owner and happy_hour.restaurant.owner != happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.restaurant.owner,
+                type="happy_hour",
+                title="New Happy Hour Request",
+                message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title} for {happy_hour.group_size} people.",
+                related_happy_hour=happy_hour,
+            )
         notify_admins(
             type="happy_hour",
             title="New Happy Hour Request",
@@ -400,6 +465,9 @@ class RestaurantCreateHappyHourView(APIView):
             happy_hour.status = "active"
             happy_hour.save(update_fields=["status"])
 
+        if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
+            send_happy_hour_notification_emails(happy_hour)
+
         return Response(
             {
                 "success": True,
@@ -542,6 +610,16 @@ class RestaurantAcceptHappyHourView(APIView):
                 related_happy_hour=happy_hour,
             )
 
+        notify_admins(
+            type="happy_hour",
+            title="Happy Hour Accepted by Restaurant",
+            message=f"{happy_hour.restaurant.name} accepted happy hour '{happy_hour.title}'.",
+            related_happy_hour=happy_hour,
+        )
+
+        if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
+            send_happy_hour_notification_emails(happy_hour)
+
         return Response({
             "success": True,
             "message": "Happy hour accepted.",
@@ -591,6 +669,13 @@ class RestaurantRejectHappyHourView(APIView):
                 related_happy_hour=happy_hour,
             )
 
+        notify_admins(
+            type="happy_hour",
+            title="Happy Hour Rejected by Restaurant",
+            message=f"{happy_hour.restaurant.name} rejected happy hour '{happy_hour.title}'.",
+            related_happy_hour=happy_hour,
+        )
+
         return Response({
             "success": True,
             "message": "Happy hour rejected.",
@@ -624,14 +709,19 @@ class RestaurantAcceptAllHappyHoursView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        pending = HappyHour.objects.filter(
+        pending = list(HappyHour.objects.filter(
             restaurant=restaurant,
             status="pending",
             created_by_role="user",
-        )
+        ))
 
-        count = pending.count()
-        pending.update(status="upcoming", accepted_at=timezone.now())
+        count = len(pending)
+        HappyHour.objects.filter(id__in=[h.id for h in pending]).update(status="upcoming", accepted_at=timezone.now())
+
+        for hh in pending:
+            hh.status = "upcoming"
+            if hh.is_public:
+                send_happy_hour_notification_emails(hh)
 
         return Response({
             "success": True,
@@ -765,7 +855,7 @@ class AdminAcceptHappyHourView(APIView):
 
     def post(self, request, pk):
         try:
-            happy_hour = HappyHour.objects.get(pk=pk)
+            happy_hour = HappyHour.objects.select_related("restaurant", "submitted_by", "restaurant__owner").get(pk=pk)
         except HappyHour.DoesNotExist:
             return Response(
                 {"success": False, "message": "Happy hour not found"},
@@ -784,10 +874,56 @@ class AdminAcceptHappyHourView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        happy_hour.status = "upcoming"
+        now = timezone.localtime(timezone.now()) if timezone.is_aware(timezone.now()) else timezone.now()
+        target_date = happy_hour.date or now.date()
+        target_status = "upcoming"
+        if happy_hour.start_time and happy_hour.end_time:
+            if target_date == now.date():
+                if happy_hour.start_time <= now.time() < happy_hour.end_time:
+                    target_status = "active"
+                elif now.time() >= happy_hour.end_time:
+                    target_status = "expired"
+
+        happy_hour.status = target_status
         happy_hour.accepted_at = timezone.now()
         happy_hour.rejection_reason = ""
         happy_hour.save(update_fields=["status", "accepted_at", "rejection_reason"])
+
+        # Notify creator user and award points
+        if happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.submitted_by,
+                type="happy_hour",
+                title="Happy Hour Approved! 🎉",
+                message=f"Your happy hour '{happy_hour.title}' at {happy_hour.restaurant.name} has been approved.",
+                related_happy_hour=happy_hour,
+            )
+            try:
+                from accounts.models import PointsTransaction
+                submitter = happy_hour.submitted_by
+                submitter.points = (submitter.points or 0) + 50
+                submitter.save(update_fields=["points"])
+                PointsTransaction.objects.create(
+                    user=submitter,
+                    text=f"Happy hour approved - {happy_hour.title}",
+                    status="approved",
+                    points=50,
+                )
+            except Exception:
+                pass
+
+        # Notify restaurant owner if different from submitter
+        if happy_hour.restaurant.owner and happy_hour.restaurant.owner != happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.restaurant.owner,
+                type="happy_hour",
+                title="Happy Hour Approved",
+                message=f"Happy hour '{happy_hour.title}' has been approved by admin.",
+                related_happy_hour=happy_hour,
+            )
+
+        if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
+            send_happy_hour_notification_emails(happy_hour)
 
         return Response({
             "success": True,
@@ -800,7 +936,7 @@ class AdminRejectHappyHourView(APIView):
 
     def post(self, request, pk):
         try:
-            happy_hour = HappyHour.objects.get(pk=pk)
+            happy_hour = HappyHour.objects.select_related("restaurant", "submitted_by", "restaurant__owner").get(pk=pk)
         except HappyHour.DoesNotExist:
             return Response(
                 {"success": False, "message": "Happy hour not found"},
@@ -820,6 +956,24 @@ class AdminRejectHappyHourView(APIView):
         happy_hour.rejected_at = timezone.now()
         happy_hour.save(update_fields=["status", "rejection_reason", "rejected_at"])
 
+        if happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.submitted_by,
+                type="happy_hour",
+                title="Happy Hour Rejected",
+                message=f"Your happy hour '{happy_hour.title}' was rejected by admin. Reason: {happy_hour.rejection_reason}",
+                related_happy_hour=happy_hour,
+            )
+
+        if happy_hour.restaurant.owner and happy_hour.restaurant.owner != happy_hour.submitted_by:
+            create_notification(
+                user=happy_hour.restaurant.owner,
+                type="happy_hour",
+                title="Happy Hour Rejected",
+                message=f"Happy hour '{happy_hour.title}' was rejected by admin. Reason: {happy_hour.rejection_reason}",
+                related_happy_hour=happy_hour,
+            )
+
         return Response({
             "success": True,
             "message": "Happy hour rejected by admin.",
@@ -830,17 +984,60 @@ class AdminAcceptAllHappyHoursView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        pending = HappyHour.objects.filter(status="pending").select_related("restaurant")
+        pending = HappyHour.objects.filter(status="pending").select_related("restaurant", "submitted_by", "restaurant__owner")
         count = 0
+        now = timezone.localtime(timezone.now()) if timezone.is_aware(timezone.now()) else timezone.now()
         for hh in pending:
             restaurant = hh.restaurant
             operating_hours = restaurant.operating_hours
             if operating_hours and isinstance(operating_hours, dict) and (operating_hours.get("open") or operating_hours.get("opening_time")) and (operating_hours.get("close") or operating_hours.get("closing_time")):
-                hh.status = "upcoming"
+                target_date = hh.date or now.date()
+                target_status = "upcoming"
+                if hh.start_time and hh.end_time and target_date == now.date():
+                    if hh.start_time <= now.time() < hh.end_time:
+                        target_status = "active"
+                    elif now.time() >= hh.end_time:
+                        target_status = "expired"
+
+                hh.status = target_status
                 hh.accepted_at = timezone.now()
                 hh.rejection_reason = ""
                 hh.save(update_fields=["status", "accepted_at", "rejection_reason"])
                 count += 1
+
+                if hh.submitted_by:
+                    create_notification(
+                        user=hh.submitted_by,
+                        type="happy_hour",
+                        title="Happy Hour Approved! 🎉",
+                        message=f"Your happy hour '{hh.title}' at {hh.restaurant.name} has been approved.",
+                        related_happy_hour=hh,
+                    )
+                    try:
+                        from accounts.models import PointsTransaction
+                        submitter = hh.submitted_by
+                        submitter.points = (submitter.points or 0) + 50
+                        submitter.save(update_fields=["points"])
+                        PointsTransaction.objects.create(
+                            user=submitter,
+                            text=f"Happy hour approved - {hh.title}",
+                            status="approved",
+                            points=50,
+                        )
+                    except Exception:
+                        pass
+
+                if hh.restaurant.owner and hh.restaurant.owner != hh.submitted_by:
+                    create_notification(
+                        user=hh.restaurant.owner,
+                        type="happy_hour",
+                        title="Happy Hour Approved",
+                        message=f"Happy hour '{hh.title}' has been approved by admin.",
+                        related_happy_hour=hh,
+                    )
+
+                if hh.is_public and hh.status in ["active", "upcoming"]:
+                    send_happy_hour_notification_emails(hh)
 
         return Response({
             "success": True,

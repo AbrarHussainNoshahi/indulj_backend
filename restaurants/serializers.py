@@ -127,6 +127,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
 
 class RestaurantDetailSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
+    cover_image_url = serializers.SerializerMethodField()
     gallery = GallerySerializer(many=True, read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
     owner = OwnerSerializer(read_only=True)
@@ -142,6 +143,7 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
             "description",
             "logo",
             "logo_url",
+            "cover_image_url",
             "address",
             "city",
             "latitude",
@@ -167,6 +169,19 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
         if obj.logo and request:
             return request.build_absolute_uri(obj.logo.url)
 
+        return None
+
+    def get_cover_image_url(self, obj):
+        request = self.context.get("request")
+        first_gallery = obj.gallery.first()
+        if first_gallery and first_gallery.image:
+            if request:
+                return request.build_absolute_uri(first_gallery.image.url)
+            return first_gallery.image.url
+        if obj.logo:
+            if request:
+                return request.build_absolute_uri(obj.logo.url)
+            return obj.logo.url
         return None
 
     def get_total_deals(self, obj):

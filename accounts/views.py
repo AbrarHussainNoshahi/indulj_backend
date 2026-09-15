@@ -139,6 +139,9 @@ class VerifyOTPView(APIView):
         response = Response({
             **make_user_data(user, request),
             'message': 'Email verified successfully',
+            'tokens': tokens,
+            'access': tokens['access'],
+            'refresh': tokens['refresh'],
         })
         set_auth_cookies(response, tokens['access'], tokens['refresh'])
         return response
@@ -218,6 +221,9 @@ class LoginView(APIView):
         response = Response({
             **make_user_data(user, request),
             'message': 'Login successful',
+            'tokens': tokens,
+            'access': tokens['access'],
+            'refresh': tokens['refresh'],
         })
         set_auth_cookies(response, tokens['access'], tokens['refresh'])
         return response
@@ -299,6 +305,9 @@ class GoogleAuthView(APIView):
         response = Response({
             **make_user_data(user, request),
             "message": "Google login successful",
+            "tokens": tokens,
+            "access": tokens["access"],
+            "refresh": tokens["refresh"],
         })
 
         set_auth_cookies(response, tokens["access"], tokens["refresh"])
@@ -319,10 +328,11 @@ class LogoutView(APIView):
 
         # Mark current session as revoked/inactive
         try:
-            access_token = request.COOKIES.get('access_token')
-            if access_token:
+            auth_header = request.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                token_str = auth_header.split(' ')[1]
                 from rest_framework_simplejwt.tokens import AccessToken
-                token       = AccessToken(access_token)
+                token = AccessToken(token_str)
                 session_key = token.get('session_key')
                 if session_key:
                     UserSession.objects.filter(
@@ -345,7 +355,11 @@ class CookieTokenRefreshView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        refresh_token = request.COOKIES.get('refresh_token')
+        refresh_token = (
+            request.COOKIES.get('refresh_token')
+            or request.data.get('refresh')
+            or request.data.get('refresh_token')
+        )
         if not refresh_token:
             return Response({'success': False, 'message': 'No refresh token'}, status=401)
         try:
@@ -360,7 +374,12 @@ class CookieTokenRefreshView(APIView):
                     return Response({'success': False, 'message': 'Session revoked'}, status=401)
 
             tokens   = {'access': str(refresh.access_token), 'refresh': str(refresh)}
-            response = Response({'success': True})
+            response = Response({
+                'success': True,
+                'access': tokens['access'],
+                'refresh': tokens['refresh'],
+                'tokens': tokens,
+            })
             set_auth_cookies(response, tokens['access'], tokens['refresh'])
             return response
         except TokenError:

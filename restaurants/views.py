@@ -426,11 +426,16 @@ class PublicRestaurantDetailView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request, pk):
+        from django.db.models import Prefetch
         try:
-            restaurant = Restaurant.objects.prefetch_related(
-                "gallery",
-                "reviews__user",
-            ).get(pk=pk, status="active")
+            restaurant = (
+                Restaurant.objects.prefetch_related(
+                    "gallery",
+                    Prefetch("reviews", queryset=Review.objects.filter(is_hidden=False).select_related("user")),
+                )
+                .exclude(status="suspended")
+                .get(pk=pk)
+            )
         except Restaurant.DoesNotExist:
             return Response(
                 {
@@ -1034,7 +1039,7 @@ class ReviewHelpfulView(APIView):
     POST /api/restaurants/reviews/<review_id>/helpful/
     """
 
-    permission_classes = [IsAuthenticated]
+    permission_classes = [AllowAny]
 
     def post(self, request, review_id):
         try:

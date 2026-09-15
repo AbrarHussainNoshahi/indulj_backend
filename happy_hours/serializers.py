@@ -92,21 +92,24 @@ class HappyHourDetailSerializer(HappyHourListSerializer):
 
 
 class PlanHappyHourSerializer(serializers.Serializer):
-    restaurant = serializers.IntegerField()
+    restaurant = serializers.CharField(required=False, allow_blank=True, allow_null=True, default="")
+    restaurant_name = serializers.CharField(required=False, allow_blank=True, default="")
 
     title = serializers.CharField(
-        required=True,
-        allow_blank=False,
+        required=False,
+        allow_blank=True,
         max_length=255,
+        default="",
     )
 
     date = serializers.DateField(
-        required=True,
-        allow_null=False,
+        required=False,
+        allow_null=True,
     )
 
-    event_type = serializers.ChoiceField(
-        choices=HappyHour.EVENT_TYPE_CHOICES
+    event_type = serializers.CharField(
+        required=False,
+        default="casual",
     )
 
     group_size = serializers.IntegerField(
@@ -115,11 +118,12 @@ class PlanHappyHourSerializer(serializers.Serializer):
         default=1,
     )
 
-    start_time = serializers.TimeField()
-    end_time = serializers.TimeField()
+    start_time = serializers.TimeField(required=False, allow_null=True)
+    end_time = serializers.TimeField(required=False, allow_null=True)
 
-    vibe = serializers.ChoiceField(
-        choices=HappyHour.VIBE_CHOICES
+    vibe = serializers.CharField(
+        required=False,
+        default="casual",
     )
 
     location = serializers.CharField(
@@ -141,6 +145,8 @@ class PlanHappyHourSerializer(serializers.Serializer):
     )
 
     is_public = serializers.BooleanField(default=True)
+    also_add_to_deals = serializers.BooleanField(required=False, default=False)
+    price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0.00)
 
     image = serializers.ImageField(
         required=False,
