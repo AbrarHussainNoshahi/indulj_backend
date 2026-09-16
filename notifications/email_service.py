@@ -390,3 +390,123 @@ def send_happy_hour_notification_emails(happy_hour):
         t.start()
     except Exception as e:
         logger.error(f"Failed to start happy hour notification thread: {e}")
+
+
+def _send_happy_hour_planned_worker(happy_hour_id):
+    try:
+        from happy_hours.models import HappyHour
+        from accounts.models import NotificationPreference
+
+        happy_hour = HappyHour.objects.select_related("restaurant", "submitted_by").get(pk=happy_hour_id)
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@indulj.com")
+
+        recipients = {}
+        if happy_hour.submitted_by and happy_hour.submitted_by.email:
+            recipients[happy_hour.submitted_by.email] = happy_hour.submitted_by
+
+        opted_in = NotificationPreference.objects.filter(
+            email_happy_hours=True,
+            user__is_active=True,
+        ).select_related("user")
+        for pref in opted_in:
+            if pref.user and pref.user.email:
+                recipients[pref.user.email] = pref.user
+
+        for email, user in recipients.items():
+            try:
+                is_submitter = (happy_hour.submitted_by and happy_hour.submitted_by.id == user.id)
+                if is_submitter:
+                    subject = f"🍸 Your Happy Hour is Submitted: {happy_hour.title}"
+                else:
+                    subject = f"🍸 New Happy Hour Announced: {happy_hour.title} at {happy_hour.restaurant.name if happy_hour.restaurant else 'INDULJ'}"
+
+                html_content = build_happy_hour_email_html(happy_hour, user)
+                text_content = strip_tags(html_content)
+
+                msg = EmailMultiAlternatives(
+                    subject=subject,
+                    body=text_content,
+                    from_email=from_email,
+                    to=[email],
+                )
+                msg.attach_alternative(html_content, "text/html")
+                msg.send(fail_silently=False)
+                logger.info(f"Happy hour email sent to {email}")
+            except Exception as e:
+                logger.error(f"Failed to send happy hour email to {email}: {e}")
+
+    except Exception as exc:
+        logger.error(f"Error in happy hour planned email worker: {exc}")
+
+
+def send_happy_hour_planned_email(happy_hour):
+    """
+    Asynchronously dispatches submission confirmation and alerts when a happy hour is planned.
+    """
+    try:
+        if not happy_hour:
+            return
+        t = threading.Thread(target=_send_happy_hour_planned_worker, args=(happy_hour.id,), daemon=True)
+        t.start()
+    except Exception as e:
+        logger.error(f"Failed to start happy hour planned email thread: {e}")
+
+
+def _send_deal_planned_worker(deal_id):
+    try:
+        from deals.models import Deal
+        from accounts.models import NotificationPreference
+
+        deal = Deal.objects.select_related("restaurant", "submitted_by").get(pk=deal_id)
+        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@indulj.com")
+
+        recipients = {}
+        if deal.submitted_by and deal.submitted_by.email:
+            recipients[deal.submitted_by.email] = deal.submitted_by
+
+        opted_in = NotificationPreference.objects.filter(
+            email_deals=True,
+            user__is_active=True,
+        ).select_related("user")
+        for pref in opted_in:
+            if pref.user and pref.user.email:
+                recipients[pref.user.email] = pref.user
+
+        for email, user in recipients.items():
+            try:
+                is_submitter = (deal.submitted_by and deal.submitted_by.id == user.id)
+                if is_submitter:
+                    subject = f"🔥 Your Deal is Submitted: {deal.title}"
+                else:
+                    subject = f"🔥 New Deal Alert: {deal.title} at {deal.restaurant.name if deal.restaurant else 'INDULJ'}"
+
+                html_content = build_deal_email_html(deal, user)
+                text_content = strip_tags(html_content)
+
+                msg = EmailMultiAlternatives(
+                    subject=subject,
+                    body=text_content,
+                    from_email=from_email,
+                    to=[email],
+                )
+                msg.attach_alternative(html_content, "text/html")
+                msg.send(fail_silently=False)
+                logger.info(f"Deal email sent to {email}")
+            except Exception as e:
+                logger.error(f"Failed to send deal email to {email}: {e}")
+
+    except Exception as exc:
+        logger.error(f"Error in deal planned email worker: {exc}")
+
+
+def send_deal_planned_email(deal):
+    """
+    Asynchronously dispatches submission confirmation and alerts when a deal is submitted.
+    """
+    try:
+        if not deal:
+            return
+        t = threading.Thread(target=_send_deal_planned_worker, args=(deal.id,), daemon=True)
+        t.start()
+    except Exception as e:
+        logger.error(f"Failed to start deal planned email thread: {e}")

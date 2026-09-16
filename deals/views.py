@@ -22,7 +22,11 @@ from .serializers import (
 from django.utils import timezone
 from datetime import timedelta
 from notifications.utils import create_notification, notify_admins
-from notifications.email_service import send_deal_notification_emails, send_happy_hour_notification_emails
+from notifications.email_service import (
+    send_deal_notification_emails,
+    send_happy_hour_notification_emails,
+    send_deal_planned_email,
+)
 
 
 # PUBLIC
@@ -247,6 +251,12 @@ class SubmitDealView(APIView):
                 message=f"A customer has submitted a new deal '{deal.title}' for your restaurant. It is pending admin approval.",
                 related_deal=deal,
             )
+
+        try:
+            send_deal_planned_email(deal)
+        except Exception as err:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to dispatch deal email: {err}")
 
         response_serializer = DealDetailSerializer(
             deal,

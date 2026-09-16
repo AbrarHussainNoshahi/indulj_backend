@@ -1,7 +1,11 @@
 from django.utils import timezone
 from rest_framework import status
 from notifications.utils import create_notification, notify_admins, check_and_expire_happy_hours
-from notifications.email_service import send_happy_hour_notification_emails
+from notifications.email_service import (
+    send_happy_hour_notification_emails,
+    send_happy_hour_planned_email,
+    send_deal_planned_email,
+)
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -228,6 +232,7 @@ class PlanHappyHourView(APIView):
         # Also create deal if requested
         raw_also = request.data.get("also_add_to_deals")
         also_add_deals = data.get("also_add_to_deals") or (raw_also in [True, "true", "True", "1", 1])
+        deal = None
 
         if also_add_deals:
             try:
@@ -237,12 +242,21 @@ class PlanHappyHourView(APIView):
                 if day_name not in valid_days:
                     day_name = "everyday"
 
-                price_val = data.get("price") or request.data.get("price") or 0.00
-                Deal.objects.create(
+                raw_price = data.get("price") or request.data.get("price")
+                try:
+                    price_val = float(raw_price) if raw_price else 0.00
+                except (ValueError, TypeError):
+                    price_val = 0.00
+
+                deal_image = None
+                if happy_hour.image:
+                    deal_image = happy_hour.image.name
+
+                deal = Deal.objects.create(
                     restaurant=restaurant,
                     submitted_by=request.user,
                     created_by_role="user",
-                    title=f"{title_val}",
+                    title=f"{title_val}"[:200],
                     description=data.get("description") or f"Happy Hour Special: {title_val}",
                     food_type="other",
                     price=price_val,
@@ -250,23 +264,51 @@ class PlanHappyHourView(APIView):
                     has_time_slots=True,
                     start_time=start_time_val,
                     end_time=end_time_val,
-                    image=data.get("image"),
+                    image=deal_image,
                     location_branch=data.get("location", ""),
                     status="pending",
                 )
+
+                notify_admins(
+                    type="deal",
+                    title="New Deal Submitted from Happy Hour",
+                    message=f"A new deal '{deal.title}' was submitted alongside a happy hour for approval.",
+                    related_deal=deal,
+                )
+
+                # Send deal email notification
+                try:
+                    send_deal_planned_email(deal)
+                except Exception as de_err:
+                    import logging
+                    logging.getLogger(__name__).error(f"Failed to send deal email: {de_err}")
+
             except Exception as e:
                 import logging
-                logging.getLogger(__name__).error(f"Failed to auto-create deal from happy hour: {e}")
+                logging.getLogger(__name__).error(f"Failed to auto-create deal from happy hour: {e}", exc_info=True)
 
         try:
             self._notify_restaurant(happy_hour)
         except Exception:
             pass
 
+        # Send happy hour email notification
+        try:
+            send_happy_hour_planned_email(happy_hour)
+        except Exception as he_err:
+            import logging
+            logging.getLogger(__name__).error(f"Failed to send happy hour email: {he_err}")
+
         return Response(
             {
                 "success": True,
-                "message": "Happy hour planned! Restaurant has been notified." if not also_add_deals else "Happy hour and Deal created successfully! Restaurant has been notified.",
+                "message": (
+                    "Happy hour and Deal created successfully! Restaurant has been notified."
+                    if (also_add_deals and deal is not None)
+                    else "Happy hour planned! Restaurant has been notified."
+                ),
+                "deal_created": deal is not None,
+                "deal_id": deal.id if deal else None,
                 "data": HappyHourListSerializer(
                     happy_hour,
                     context={"request": request},

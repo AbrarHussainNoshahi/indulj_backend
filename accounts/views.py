@@ -216,6 +216,16 @@ class LoginView(APIView):
                 status=403
             )
 
+        client_type = request.headers.get("X-Client-Type") or request.data.get("client_type")
+        if client_type == "app" and user.role != "user":
+            return Response(
+                {
+                    "success": False,
+                    "message": "Access restricted: Only customer accounts can log in to the Indulj app. Restaurant and Admin accounts must use the web portal.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         session, session_key = create_session(user, request)
         tokens   = get_tokens_for_user_with_session(user, session_key)
         response = Response({

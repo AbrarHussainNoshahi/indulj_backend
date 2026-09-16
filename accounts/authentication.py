@@ -6,7 +6,19 @@ from rest_framework_simplejwt.exceptions import InvalidToken, AuthenticationFail
 class CookieJWTAuthentication(JWTAuthentication):
 
     def authenticate(self, request):
-        # ── Try httpOnly cookie first ─────────────────────
+        # ── 1. Check Authorization header first if present ─────────────────────
+        header = self.get_header(request)
+        if header is not None:
+            raw_token = self.get_raw_token(header)
+            if raw_token is not None:
+                validated_token = self.get_validated_token(raw_token)
+                user = self.get_user(validated_token)
+                session_key = validated_token.get('session_key')
+                if session_key:
+                    self._check_session(user, session_key, request)
+                return user, validated_token
+
+        # ── 2. Fallback to httpOnly cookie (for web portal) ───────────────────
         access_token = request.COOKIES.get('access_token')
 
         if access_token:
@@ -24,8 +36,7 @@ class CookieJWTAuthentication(JWTAuthentication):
             except (InvalidToken, AuthenticationFailed):
                 return None
 
-        # ── Fallback to Authorization header ─────────────
-        return super().authenticate(request)
+        return None
 
     def _check_session(self, user, session_key, request):
         """
