@@ -171,6 +171,7 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost",
     "https://indulj.vercel.app",
     "https://indulj-v1.vercel.app",
+    "http://localhost:8100",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -196,6 +197,7 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost",
     "https://indulj.vercel.app",
     "https://indulj-v1.vercel.app",
+    "http://localhost:8100",
 ]
 
 # HTTPS / proxy settings for Railway
