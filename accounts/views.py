@@ -52,7 +52,7 @@ class RegisterView(APIView):
             expires_at=timezone.now() + timezone.timedelta(minutes=10)
         )
         
-        send_otp_email(user.email, otp)
+        send_otp_email(user.email, otp, user_name=user.full_name or user.display_username)
         response_data = {
             "success": True,
             "message": "OTP sent to your email.",
@@ -172,7 +172,7 @@ class ResendOTPView(APIView):
             otp=otp,
             expires_at=timezone.now() + timezone.timedelta(minutes=10)
         )
-        send_otp_email(user.email, otp)
+        send_otp_email(user.email, otp, user_name=user.full_name or user.display_username)
         response_data = {
             "success": True,
             "message": "New OTP sent",
