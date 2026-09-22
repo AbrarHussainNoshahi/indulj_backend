@@ -47,3 +47,20 @@ class IsOwnerOrAdmin(BasePermission):
                 or obj == request.user
             )
         )
+
+class IsSuperAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and getattr(request.user, "is_super_admin", False)
+        )
+
+
+class IsEmployeeAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and getattr(request.user, "is_employee_admin", False)
+        )

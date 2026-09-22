@@ -33,6 +33,11 @@ class User(AbstractUser):
         ("user", "User"),
     ]
 
+    ADMIN_TYPE_CHOICES = [
+        ("super_admin", "Super Admin"),
+        ("employee", "Employee"),
+    ]
+
     username = None
 
     email = models.EmailField(unique=True)
@@ -40,7 +45,17 @@ class User(AbstractUser):
     display_username = models.CharField(max_length=50, blank=True, default="")
     phone_number = models.CharField(max_length=20, blank=True)
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default="user")
+    admin_type = models.CharField(
+        max_length=20,
+        choices=ADMIN_TYPE_CHOICES,
+        default="super_admin",
+        blank=True,
+    )
     avatar = models.ImageField(upload_to="avatars/", null=True, blank=True)
+    designation = models.CharField(max_length=100, blank=True, default="")
+    unique_id = models.CharField(max_length=50, blank=True, default="")
+    assigned_roles = models.JSONField(default=list, blank=True)
+    social_links = models.JSONField(default=dict, blank=True)
     points = models.IntegerField(default=0)
     referral_code = models.CharField(max_length=20, unique=True, blank=True)
     referred_by_code = models.CharField(max_length=20, blank=True, null=True)
@@ -67,7 +82,29 @@ class User(AbstractUser):
                 suffix = "".join(random.choices(string.digits, k=3))
                 self.referral_code = f"{base}{year}{suffix}"
 
+        if not self.unique_id and self.role == "admin":
+            parts = (self.full_name or "SA").strip().split()
+            initials = "".join([p[0].upper() for p in parts[:2]]) if parts else "SA"
+            digits = "".join(random.choices(string.digits, k=4))
+            self.unique_id = f"{initials}-{digits}"
+
         super().save(*args, **kwargs)
+
+    @property
+    def is_super_admin(self):
+        return self.role == "admin" and (self.is_superuser or self.admin_type == "super_admin")
+
+    @property
+    def is_employee_admin(self):
+        return self.role == "admin" and not self.is_super_admin
+
+    @property
+    def roles_display(self):
+        if self.assigned_roles and isinstance(self.assigned_roles, list) and len(self.assigned_roles) > 0:
+            return " & ".join(self.assigned_roles)
+        if self.is_super_admin:
+            return "Super Admin"
+        return "Manage Deals & Happy Hours"
 
     def __str__(self):
         return self.email
@@ -173,4 +210,21 @@ class ReceiptScan(models.Model):
 
     def __str__(self):
         rest = self.restaurant.name if self.restaurant else self.restaurant_name
-        return f"Receipt by {self.user.email} at {rest} - {self.status}"
+        return f"Receipt by {self.user.email} at {rest} - {self.status}"
+
+
+class Partner(models.Model):
+    name = models.CharField(max_length=255)
+    designation = models.CharField(max_length=150, blank=True, default="Partner")
+    image = models.ImageField(upload_to="partners/", null=True, blank=True)
+    social_links = models.JSONField(default=dict, blank=True)
+    order = models.IntegerField(default=0)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["order", "-created_at"]
+
+    def __str__(self):
+        return f"{self.name} ({self.designation})"

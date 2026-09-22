@@ -238,11 +238,22 @@ class AdminDashboardStatsView(APIView):
         last_30 = now - timedelta(days=30)
         previous_30 = now - timedelta(days=60)
 
-        total_users = User.objects.filter(role="user").count()
-        total_restaurants = Restaurant.objects.count()
-        total_orders = Order.objects.count()
+        restaurants_qs = Restaurant.objects.filter(owner__isnull=False)
+        orders_qs = Order.objects.all()
+        deals_qs = Deal.objects.filter(restaurant__status="active")
+        hh_qs = HappyHour.objects.filter(restaurant__status="active")
 
-        completed_orders = Order.objects.filter(status="completed")
+        if request.user.is_employee_admin:
+            restaurants_qs = restaurants_qs.filter(registered_by=request.user)
+            orders_qs = orders_qs.filter(restaurant__registered_by=request.user)
+            deals_qs = deals_qs.filter(restaurant__registered_by=request.user)
+            hh_qs = hh_qs.filter(restaurant__registered_by=request.user)
+
+        total_users = User.objects.filter(role="user").count()
+        total_restaurants = restaurants_qs.count()
+        total_orders = orders_qs.count()
+
+        completed_orders = orders_qs.filter(status="completed")
         total_revenue = money(
             completed_orders.aggregate(total=Sum("total_amount"))["total"]
         )
@@ -265,17 +276,17 @@ class AdminDashboardStatsView(APIView):
                     "total_users": total_users,
                     "total_restaurants": total_restaurants,
                     "total_orders": total_orders,
-                    "pending_orders": Order.objects.filter(status="pending").count(),
+                    "pending_orders": orders_qs.filter(status="pending").count(),
                     "completed_orders": completed_orders.count(),
                     "total_revenue": total_revenue,
                     "platform_growth": percentage_growth(
                         users_this_month,
                         users_prev_month,
                     ),
-                    "pending_deals": Deal.objects.filter(status="pending").count(),
-                    "active_deals": Deal.objects.filter(status="active").count(),
-                    "pending_happy_hours": HappyHour.objects.filter(status="pending").count(),
-                    "active_happy_hours": HappyHour.objects.filter(
+                    "pending_deals": deals_qs.filter(status="pending").count(),
+                    "active_deals": deals_qs.filter(status="active").count(),
+                    "pending_happy_hours": hh_qs.filter(status="pending").count(),
+                    "active_happy_hours": hh_qs.filter(
                         status__in=["active", "upcoming"]
                     ).count(),
                     "unread_notifications": Notification.objects.filter(
@@ -291,9 +302,12 @@ class AdminRevenueChartView(APIView):
 
     def get(self, request):
         months = parse_int(request.query_params.get("months"), default=6)
+        orders_qs = Order.objects.filter(status="completed")
+        if request.user.is_employee_admin:
+            orders_qs = orders_qs.filter(restaurant__registered_by=request.user)
 
         data = last_n_months_data(
-            Order.objects.filter(status="completed"),
+            orders_qs,
             "updated_at",
             "total_amount",
             months,
@@ -306,23 +320,24 @@ class AdminRevenueSourcesView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        orders_qs = Order.objects.filter(status="completed")
+        if request.user.is_employee_admin:
+            orders_qs = orders_qs.filter(restaurant__registered_by=request.user)
+
         deal_revenue = money(
-            Order.objects.filter(
-                status="completed",
+            orders_qs.filter(
                 deal__isnull=False,
             ).aggregate(total=Sum("total_amount"))["total"]
         )
 
         happy_hour_revenue = money(
-            Order.objects.filter(
-                status="completed",
+            orders_qs.filter(
                 happy_hour__isnull=False,
             ).aggregate(total=Sum("total_amount"))["total"]
         )
 
         direct_revenue = money(
-            Order.objects.filter(
-                status="completed",
+            orders_qs.filter(
                 deal__isnull=True,
                 happy_hour__isnull=True,
             ).aggregate(total=Sum("total_amount"))["total"]
@@ -345,25 +360,32 @@ class AdminSubmissionsChartView(APIView):
 
     def get(self, request):
         months = parse_int(request.query_params.get("months"), default=6)
+        deals_qs = Deal.objects.filter(restaurant__status="active")
+        hh_qs = HappyHour.objects.filter(restaurant__status="active")
+        orders_qs = Order.objects.all()
+        if request.user.is_employee_admin:
+            deals_qs = deals_qs.filter(restaurant__registered_by=request.user)
+            hh_qs = hh_qs.filter(restaurant__registered_by=request.user)
+            orders_qs = orders_qs.filter(restaurant__registered_by=request.user)
 
         return Response(
             {
                 "success": True,
                 "data": {
                     "deals": last_n_months_data(
-                        Deal.objects.all(),
+                        deals_qs,
                         "created_at",
                         None,
                         months,
                     ),
                     "happy_hours": last_n_months_data(
-                        HappyHour.objects.all(),
+                        hh_qs,
                         "created_at",
                         None,
                         months,
                     ),
                     "orders": last_n_months_data(
-                        Order.objects.all(),
+                        orders_qs,
                         "created_at",
                         None,
                         months,
@@ -377,6 +399,8 @@ class AdminUserGrowthView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        if request.user.is_employee_admin:
+            return Response({"success": True, "data": []})
         months = parse_int(request.query_params.get("months"), default=6)
 
         data = last_n_months_data(
@@ -393,8 +417,12 @@ class AdminRestaurantEarningsView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        base_qs = Restaurant.objects.filter(owner__isnull=False)
+        if request.user.is_employee_admin:
+            base_qs = base_qs.filter(registered_by=request.user)
+
         restaurants = (
-            Restaurant.objects.annotate(
+            base_qs.annotate(
                 total_revenue=Sum(
                     "orders__total_amount",
                     filter=Q(orders__status="completed"),
@@ -445,11 +473,22 @@ class AdminPlatformSummaryView(APIView):
         last_30 = now - timedelta(days=30)
         previous_30 = now - timedelta(days=60)
 
-        total_users = User.objects.filter(role="user").count()
-        total_restaurants = Restaurant.objects.count()
-        total_orders = Order.objects.count()
+        restaurants_qs = Restaurant.objects.filter(owner__isnull=False)
+        orders_qs = Order.objects.all()
+        deals_qs = Deal.objects.filter(restaurant__status="active")
+        hh_qs = HappyHour.objects.filter(restaurant__status="active")
 
-        completed_orders = Order.objects.filter(status="completed")
+        if request.user.is_employee_admin:
+            restaurants_qs = restaurants_qs.filter(registered_by=request.user)
+            orders_qs = orders_qs.filter(restaurant__registered_by=request.user)
+            deals_qs = deals_qs.filter(restaurant__registered_by=request.user)
+            hh_qs = hh_qs.filter(restaurant__registered_by=request.user)
+
+        total_users = User.objects.filter(role="user").count()
+        total_restaurants = restaurants_qs.count()
+        total_orders = orders_qs.count()
+
+        completed_orders = orders_qs.filter(status="completed")
         total_revenue = money(
             completed_orders.aggregate(total=Sum("total_amount"))["total"]
         )
@@ -485,7 +524,7 @@ class AdminPlatformSummaryView(APIView):
         )
 
         top_restaurants_qs = (
-            Restaurant.objects.annotate(
+            restaurants_qs.annotate(
                 revenue=Sum(
                     "orders__total_amount",
                     filter=Q(orders__status="completed"),
@@ -522,17 +561,17 @@ class AdminPlatformSummaryView(APIView):
                         "total_users": total_users,
                         "total_restaurants": total_restaurants,
                         "total_orders": total_orders,
-                        "pending_orders": Order.objects.filter(status="pending").count(),
+                        "pending_orders": orders_qs.filter(status="pending").count(),
                         "completed_orders": completed_orders.count(),
                         "total_revenue": total_revenue,
                         "platform_growth": percentage_growth(
                             users_this_month,
                             users_prev_month,
                         ),
-                        "pending_deals": Deal.objects.filter(status="pending").count(),
-                        "active_deals": Deal.objects.filter(status="active").count(),
-                        "pending_happy_hours": HappyHour.objects.filter(status="pending").count(),
-                        "active_happy_hours": HappyHour.objects.filter(
+                        "pending_deals": deals_qs.filter(status="pending").count(),
+                        "active_deals": deals_qs.filter(status="active").count(),
+                        "pending_happy_hours": hh_qs.filter(status="pending").count(),
+                        "active_happy_hours": hh_qs.filter(
                             status__in=["active", "upcoming"]
                         ).count(),
                     },
@@ -544,25 +583,25 @@ class AdminPlatformSummaryView(APIView):
                             months,
                         ),
                         "orders_trend": last_n_months_data(
-                            Order.objects.all(),
+                            orders_qs,
                             "created_at",
                             None,
                             months,
                         ),
-                        "user_growth": last_n_months_data(
+                        "user_growth": [] if request.user.is_employee_admin else last_n_months_data(
                             User.objects.filter(role="user"),
                             "date_joined",
                             None,
                             months,
                         ),
                         "deal_submissions": last_n_months_data(
-                            Deal.objects.all(),
+                            deals_qs,
                             "created_at",
                             None,
                             months,
                         ),
                         "happy_hour_submissions": last_n_months_data(
-                            HappyHour.objects.all(),
+                            hh_qs,
                             "created_at",
                             None,
                             months,
@@ -573,10 +612,10 @@ class AdminPlatformSummaryView(APIView):
                         {"label": "Happy Hour Bookings", "value": happy_hour_revenue},
                         {"label": "Direct Orders", "value": direct_revenue},
                     ],
-                    "order_statuses": order_status_counts(Order.objects.all()),
-                    "deal_statuses": deal_status_counts(Deal.objects.all()),
+                    "order_statuses": order_status_counts(orders_qs),
+                    "deal_statuses": deal_status_counts(deals_qs),
                     "happy_hour_statuses": happy_hour_status_counts(
-                        HappyHour.objects.all()
+                        hh_qs
                     ),
                     "top_restaurants": top_restaurants,
                 },
@@ -589,6 +628,8 @@ class AdminRevenueOrdersTrendView(APIView):
     def get(self, request):
         period = request.query_params.get("period", "monthly")
         orders = Order.objects.filter(status="completed")
+        if request.user.is_employee_admin:
+            orders = orders.filter(restaurant__registered_by=request.user)
 
         revenue_data = aggregate_by_period(
             orders,
@@ -636,15 +677,20 @@ class AdminDealsHappyHoursChartView(APIView):
 
     def get(self, request):
         period = request.query_params.get("period", "monthly")
+        deals_qs = Deal.objects.filter(restaurant__status="active")
+        hh_qs = HappyHour.objects.filter(restaurant__status="active")
+        if request.user.is_employee_admin:
+            deals_qs = deals_qs.filter(restaurant__registered_by=request.user)
+            hh_qs = hh_qs.filter(restaurant__registered_by=request.user)
 
         deals_data = aggregate_by_period(
-            Deal.objects.all(),
+            deals_qs,
             "created_at",
             period,
         )
 
         happy_hours_data = aggregate_by_period(
-            HappyHour.objects.all(),
+            hh_qs,
             "created_at",
             period,
         )
@@ -873,6 +919,11 @@ class AdminRestaurantAnalyticsView(APIView):
     def get(self, request, pk):
         try:
             restaurant = Restaurant.objects.get(pk=pk)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only view analytics for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Restaurant.DoesNotExist:
             return Response(
                 {"success": False, "message": "Restaurant not found."},
@@ -1890,8 +1941,11 @@ class AdminRecentActivityView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        rest_qs = Restaurant.objects.filter(status="active")
+        if request.user.is_employee_admin:
+            rest_qs = rest_qs.filter(registered_by=request.user)
         activities = _build_recent_activity(
-            Restaurant.objects.all(),
+            rest_qs,
             per_type_limit=80,
         )
 
@@ -1957,8 +2011,11 @@ class AdminRecentActivityExportView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
+        rest_qs = Restaurant.objects.filter(status="active")
+        if request.user.is_employee_admin:
+            rest_qs = rest_qs.filter(registered_by=request.user)
         activities = _build_recent_activity(
-            Restaurant.objects.all(),
+            rest_qs,
             per_type_limit=500,
         )
 

@@ -5,8 +5,10 @@ from .views import (
     AdminCreateRestaurantView,
     AdminRestaurantDetailView,
     AdminSuspendRestaurantView,
+    AdminChangeRestaurantPlanView,
     MyRestaurantView,
     MyRestaurantGalleryView,
+    MyRestaurantMenuView,
     PublicRestaurantListView,
     PublicRestaurantDetailView,
 
@@ -36,11 +38,14 @@ urlpatterns = [
     path("<int:pk>/update/", AdminRestaurantDetailView.as_view()),
     path("<int:pk>/delete/", AdminRestaurantDetailView.as_view()),
     path("<int:pk>/suspend/", AdminSuspendRestaurantView.as_view()),
+    path("<int:pk>/change-plan/", AdminChangeRestaurantPlanView.as_view()),
 
     # Restaurant owner
     path("my-restaurant/", MyRestaurantView.as_view()),
     path("my-restaurant/update/", MyRestaurantView.as_view()),
     path("my-restaurant/gallery/add/", MyRestaurantGalleryView.as_view()),
+    path("my-restaurant/menu/add/", MyRestaurantMenuView.as_view()),
+    path("my-restaurant/menu/<int:item_id>/", MyRestaurantMenuView.as_view()),
     path(
         "my-restaurant/gallery/<int:image_id>/",
         MyRestaurantGalleryView.as_view(),

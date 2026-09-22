@@ -16,6 +16,8 @@ from .views import (
     RestaurantDealListView,
     RestaurantCreateDealView,
     RestaurantUpdateDeleteDealView,
+    RestaurantApproveDealView,
+    RestaurantRejectDealView,
 
     AdminCreateDealView,
     AdminDealListView,
@@ -46,6 +48,8 @@ urlpatterns = [
     path("restaurant/create/", RestaurantCreateDealView.as_view()),
     path("restaurant/<int:pk>/update/", RestaurantUpdateDeleteDealView.as_view()),
     path("restaurant/<int:pk>/delete/", RestaurantUpdateDeleteDealView.as_view()),
+    path("restaurant/<int:pk>/approve/", RestaurantApproveDealView.as_view()),
+    path("restaurant/<int:pk>/reject/", RestaurantRejectDealView.as_view()),
 
     # Admin
     path("admin/", AdminDealListView.as_view()),

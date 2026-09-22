@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from .models import Restaurant, RestaurantGallery, Review
+from .models import Restaurant, RestaurantGallery, Review, RestaurantMenuItem
 
 
 @admin.register(Restaurant)
@@ -86,3 +86,16 @@ class ReviewAdmin(admin.ModelAdmin):
         queryset.update(is_flagged=False, flagged_reason="")
 
     clear_flags.short_description = "Clear selected flags"
+@admin.register(RestaurantMenuItem)
+class MenuItemAdmin(admin.ModelAdmin):
+    list_display = [
+        "id",
+        "restaurant",
+        "name",
+        "price",
+        "created_at",
+    ]
+    search_fields = [
+        "name",
+        "restaurant__name",
+    ]

@@ -79,7 +79,7 @@ class GlobalSearchView(APIView):
         ]
 
         deals = (
-            Deal.objects.filter(status="active")
+            Deal.objects.filter(status="active", restaurant__status="active")
             .filter(
                 Q(title__icontains=q)
                 | Q(description__icontains=q)
@@ -121,6 +121,7 @@ class GlobalSearchView(APIView):
             HappyHour.objects.filter(
                 status__in=["active", "upcoming"],
                 is_public=True,
+                restaurant__status="active",
             )
             .filter(
                 Q(title__icontains=q)
@@ -225,7 +226,7 @@ class SearchDealsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = Deal.objects.filter(status="active").select_related("restaurant")
+        qs = Deal.objects.filter(status="active", restaurant__status="active").select_related("restaurant")
 
         q = request.query_params.get("q", "").strip()
         city = request.query_params.get("city", "").strip()
@@ -307,6 +308,7 @@ class SearchHappyHoursView(APIView):
         qs = HappyHour.objects.filter(
             status__in=["active", "upcoming"],
             is_public=True,
+            restaurant__status="active",
         ).select_related("restaurant")
 
         q = request.query_params.get("q", "").strip()

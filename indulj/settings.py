@@ -169,17 +169,21 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:4200",
     "capacitor://localhost",
     "http://localhost",
+    "https://localhost",
     "https://indulj.vercel.app",
     "https://indulj-v1.vercel.app",
-    "http://localhost:8100",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
 
-CORS_ALLOW_HEADERS = [
-    "content-type",
-    "authorization",
+from corsheaders.defaults import default_headers
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-client-type",
     "x-csrftoken",
+    "accept-encoding",
+    "dnt",
+    "origin",
 ]
 
 CORS_EXPOSE_HEADERS = [
@@ -195,9 +199,9 @@ CSRF_TRUSTED_ORIGINS = [
     "http://localhost:4200",
     "capacitor://localhost",
     "http://localhost",
+    "https://localhost",
     "https://indulj.vercel.app",
     "https://indulj-v1.vercel.app",
-    "http://localhost:8100",
 ]
 
 # HTTPS / proxy settings for Railway

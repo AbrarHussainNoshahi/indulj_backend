@@ -23,11 +23,19 @@ from .views import (
     AdminUserDeleteView,
     AdminUserSuspendView,
     AdminUserDetailView,
+    AdminStaffListView,
+    AdminStaffCreateView,
+    AdminStaffDetailView,
+    AdminStaffUpdateView,
+    AdminStaffSuspendView,
+    AdminStaffDeleteView,
     PointsRewardsSummaryView,
     PointsTransactionHistoryView,
     ReceiptScanUploadView,
     AdminReceiptScanListView,
     AdminVerifyReceiptScanView,
+    PartnerListView,
+    PartnerDetailView,
 )
 
 urlpatterns = [
@@ -64,9 +72,21 @@ urlpatterns = [
     path("sessions/revoke-all/", RevokeAllSessionsView.as_view()),
     path("sessions/<int:session_id>/revoke/", SessionRevokeView.as_view()),
 
-    # Admin User Management
+    # Admin User Management (Regular users)
     path("admin/users/", AdminUsersListView.as_view()),
     path("admin/users/<int:pk>/", AdminUserDetailView.as_view()),
     path("admin/users/<int:pk>/delete/", AdminUserDeleteView.as_view()),
     path("admin/users/<int:pk>/suspend/", AdminUserSuspendView.as_view()),
+
+    # Admin Staff / Employee Accounts Management (Super Admin only)
+    path("admin/staff/", AdminStaffListView.as_view()),
+    path("admin/staff/create/", AdminStaffCreateView.as_view()),
+    path("admin/staff/<int:pk>/", AdminStaffDetailView.as_view()),
+    path("admin/staff/<int:pk>/update/", AdminStaffUpdateView.as_view()),
+    path("admin/staff/<int:pk>/suspend/", AdminStaffSuspendView.as_view()),
+    path("admin/staff/<int:pk>/delete/", AdminStaffDeleteView.as_view()),
+
+    # Partners Management (Public list, Super Admin CRUD)
+    path("partners/", PartnerListView.as_view()),
+    path("partners/<int:pk>/", PartnerDetailView.as_view()),
 ]

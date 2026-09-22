@@ -1,5 +1,11 @@
 from rest_framework import serializers
-from .models import Notification
+from .models import Notification, DeviceToken
+
+class DeviceTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeviceToken
+        fields = ['id', 'registration_id', 'platform', 'is_active', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'is_active', 'created_at', 'updated_at']
 
 class NotificationSerializer(serializers.ModelSerializer):
     status = serializers.ReadOnlyField()

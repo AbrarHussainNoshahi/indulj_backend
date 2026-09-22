@@ -11,7 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.db.models import Count, Sum, Q
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import NotificationPreference, OTPVerification, User, UserSession
+from .models import NotificationPreference, OTPVerification, User, UserSession, Partner
 from .serializers import (
     ChangePasswordSerializer, LoginSerializer,
     NotificationPreferenceSerializer, RegisterSerializer,
@@ -658,10 +658,10 @@ class UserStatsView(APIView):
 
 # ─── ADMIN USERS MANAGEMENT ─────────────────────────────────
 from datetime import timedelta
-from .permissions import IsAdmin
+from .permissions import IsAdmin, IsSuperAdmin, IsEmployeeAdmin
 
 class AdminUsersListView(APIView):
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get(self, request):
         now = timezone.now()
@@ -700,7 +700,7 @@ class AdminUsersListView(APIView):
 
 
 class AdminUserDeleteView(APIView):
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def delete(self, request, pk):
         try:
@@ -712,7 +712,7 @@ class AdminUserDeleteView(APIView):
 
 
 class AdminUserSuspendView(APIView):
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def post(self, request, pk):
         try:
@@ -730,7 +730,7 @@ class AdminUserSuspendView(APIView):
 
 
 class AdminUserDetailView(APIView):
-    permission_classes = [IsAuthenticated, IsAdmin]
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
 
     def get(self, request, pk):
         try:
@@ -977,3 +977,364 @@ class AdminVerifyReceiptScanView(APIView):
         })
 
 
+
+
+# ─── ADMIN STAFF / EMPLOYEE ACCOUNTS MANAGEMENT (SUPER ADMIN) ─
+from .permissions import IsSuperAdmin
+from .serializers import (
+    AdminStaffSerializer,
+    CreateAdminStaffSerializer,
+    UpdateAdminStaffSerializer,
+)
+
+class AdminStaffListView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get(self, request):
+        qs = (
+            User.objects.filter(role="admin")
+            .annotate(
+                restaurants_count=Count("registered_restaurants", distinct=True)
+            )
+            .order_by("-date_joined")
+        )
+
+        search = request.query_params.get("search")
+        if search:
+            qs = qs.filter(
+                Q(full_name__icontains=search)
+                | Q(email__icontains=search)
+                | Q(phone_number__icontains=search)
+            )
+
+        admin_type = request.query_params.get("admin_type")
+        if admin_type and admin_type != "all":
+            qs = qs.filter(admin_type=admin_type)
+
+        status_param = request.query_params.get("status")
+        if status_param == "active":
+            qs = qs.filter(is_suspended=False)
+        elif status_param == "suspended":
+            qs = qs.filter(is_suspended=True)
+
+        serializer = AdminStaffSerializer(
+            qs,
+            many=True,
+            context={"request": request}
+        )
+
+        total_employees = User.objects.filter(role="admin", admin_type="employee").count()
+        total_super_admins = User.objects.filter(role="admin", admin_type="super_admin").count()
+
+        return Response({
+            "success": True,
+            "count": qs.count(),
+            "total_employees": total_employees,
+            "total_super_admins": total_super_admins,
+            "data": serializer.data,
+        })
+
+
+class AdminStaffCreateView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        serializer = CreateAdminStaffSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = serializer.save()
+        return Response(
+            {
+                "success": True,
+                "message": f"Admin account '{user.email}' created successfully.",
+                "data": AdminStaffSerializer(user, context={"request": request}).data,
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class AdminStaffDetailView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def get(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="admin")
+        except User.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Admin staff member not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Get restaurants registered by this employee (or all if super admin)
+        if user.admin_type == "super_admin":
+            from restaurants.models import Restaurant
+            restaurants = Restaurant.objects.all().order_by("-created_at")
+        else:
+            restaurants = user.registered_restaurants.all().order_by("-created_at")
+
+        rest_data = []
+        for r in restaurants:
+            logo_url = None
+            if r.logo and hasattr(r.logo, 'url'):
+                try:
+                    logo_url = request.build_absolute_uri(r.logo.url)
+                except Exception:
+                    logo_url = r.logo.url
+
+            rest_data.append({
+                "id": r.id,
+                "name": r.name,
+                "city": r.city,
+                "address": r.address or (f"{r.city}, Downtown" if r.city else "123 Main St, Downtown"),
+                "status": r.status,
+                "logo": logo_url,
+                "subscription_plan": r.subscription_plan,
+                "owner_name": r.owner.full_name if r.owner else "N/A",
+                "owner_email": r.owner.email if r.owner else "N/A",
+                "total_deals": r.deals.count(),
+                "total_happy_hours": r.happy_hours.count(),
+                "created_at": r.created_at.strftime("%b %d, %Y") if r.created_at else "N/A",
+            })
+
+        # Calculate deals and happy hours
+        from deals.models import Deal
+        from happy_hours.models import HappyHour
+
+        deals_submitted = Deal.objects.filter(
+            Q(submitted_by=user) | Q(restaurant__in=restaurants)
+        ).distinct().count()
+
+        happy_hours_count = HappyHour.objects.filter(
+            Q(submitted_by=user) | Q(restaurant__in=restaurants)
+        ).distinct().count()
+
+        approved_deals = Deal.objects.filter(
+            Q(submitted_by=user) | Q(restaurant__in=restaurants),
+            status="active"
+        ).distinct().count()
+
+        approved_hh = HappyHour.objects.filter(
+            Q(submitted_by=user) | Q(restaurant__in=restaurants),
+            status="active"
+        ).distinct().count()
+
+        total_approved = approved_deals + approved_hh
+
+        overview = {
+            "total_restaurants": len(rest_data),
+            "deals_submitted": deals_submitted,
+            "happy_hours": happy_hours_count,
+            "total_approved": total_approved,
+        }
+
+        suspended_list = [r for r in rest_data if r["status"] == "suspended"]
+        active_list = [r for r in rest_data if r["status"] in ("active", "newly_joined")]
+
+        return Response({
+            "success": True,
+            "data": {
+                "staff": AdminStaffSerializer(user, context={"request": request}).data,
+                "overview": overview,
+                "restaurants_count": len(rest_data),
+                "active_restaurants": len(active_list),
+                "suspended_restaurants": len(suspended_list),
+                "restaurants": rest_data,
+                "total_restaurants_list": rest_data,
+                "suspended_restaurants_list": suspended_list,
+            }
+        })
+
+
+class AdminStaffUpdateView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def put(self, request, pk):
+        return self.patch(request, pk)
+
+    def patch(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="admin")
+        except User.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Admin staff member not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = UpdateAdminStaffSerializer(user, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user = serializer.save()
+        return Response({
+            "success": True,
+            "message": "Admin staff updated successfully.",
+            "data": AdminStaffSerializer(user, context={"request": request}).data,
+        })
+
+
+class AdminStaffSuspendView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def post(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="admin")
+        except User.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Admin staff member not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if user.id == request.user.id:
+            return Response(
+                {"success": False, "message": "You cannot suspend your own account."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user.is_suspended = not user.is_suspended
+        user.save(update_fields=["is_suspended"])
+        status_text = "suspended" if user.is_suspended else "activated"
+
+        return Response({
+            "success": True,
+            "message": f"Admin staff {status_text} successfully.",
+            "is_suspended": user.is_suspended,
+        })
+
+
+class AdminStaffDeleteView(APIView):
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+
+    def delete(self, request, pk):
+        try:
+            user = User.objects.get(pk=pk, role="admin")
+        except User.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Admin staff member not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        if user.id == request.user.id:
+            return Response(
+                {"success": False, "message": "You cannot delete your own account."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        user.delete()
+        return Response({
+            "success": True,
+            "message": "Admin staff member deleted successfully.",
+        })
+
+
+# ─── PARTNERS MANAGEMENT VIEWS (FOR ABOUT US & ADMIN PROFILE) ─
+from .serializers import PartnerSerializer, PartnerCreateUpdateSerializer
+
+class PartnerListView(APIView):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAuthenticated(), IsSuperAdmin()]
+
+    def get(self, request):
+        partners = Partner.objects.filter(is_active=True).order_by("order", "-created_at")
+        serializer = PartnerSerializer(partners, many=True, context={"request": request})
+        return Response({
+            "success": True,
+            "count": partners.count(),
+            "data": serializer.data,
+        })
+
+    def post(self, request):
+        serializer = PartnerCreateUpdateSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        partner = serializer.save()
+        return Response(
+            {
+                "success": True,
+                "message": f"Partner '{partner.name}' added successfully.",
+                "data": PartnerSerializer(partner, context={"request": request}).data,
+            },
+            status=status.HTTP_201_CREATED
+        )
+
+
+class PartnerDetailView(APIView):
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAuthenticated(), IsSuperAdmin()]
+
+    def get_object(self, pk):
+        try:
+            return Partner.objects.get(pk=pk)
+        except Partner.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        partner = self.get_object(pk)
+        if not partner:
+            return Response(
+                {"success": False, "message": "Partner not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        return Response({
+            "success": True,
+            "data": PartnerSerializer(partner, context={"request": request}).data,
+        })
+
+    def patch(self, request, pk):
+        partner = self.get_object(pk)
+        if not partner:
+            return Response(
+                {"success": False, "message": "Partner not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        serializer = PartnerCreateUpdateSerializer(partner, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        partner = serializer.save()
+        return Response({
+            "success": True,
+            "message": "Partner updated successfully.",
+            "data": PartnerSerializer(partner, context={"request": request}).data,
+        })
+
+    def put(self, request, pk):
+        return self.patch(request, pk)
+
+    def delete(self, request, pk):
+        partner = self.get_object(pk)
+        if not partner:
+            return Response(
+                {"success": False, "message": "Partner not found."},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        partner.delete()
+        return Response({
+            "success": True,
+            "message": "Partner removed successfully.",
+        })

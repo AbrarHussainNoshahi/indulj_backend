@@ -408,12 +408,28 @@ class RestaurantCompleteOrderView(APIView):
 
         order.mark_completed()
 
+        deal_or_hh_title = (
+            order.deal.title if order.deal
+            else (order.happy_hour.title if order.happy_hour else "Deal")
+        )
+
         create_notification(
             user=order.user,
             type="order",
             title=f"Booking Completed {order.order_number}",
             message=f"Your booking at {order.restaurant.name} has been completed.",
             related_order=order,
+            related_restaurant=order.restaurant,
+            related_deal=order.deal,
+            related_happy_hour=order.happy_hour,
+            metadata={
+                "action_type": "review",
+                "restaurant_id": order.restaurant.id,
+                "restaurant_name": order.restaurant.name,
+                "deal_title": deal_or_hh_title,
+                "item_name": deal_or_hh_title,
+                "order_type": order.order_type,
+            },
         )
 
         return Response(
@@ -473,6 +489,13 @@ class AdminOrderListView(APIView):
             "happy_hour",
         ).all()
 
+        if request.user.is_employee_admin:
+            qs = qs.filter(restaurant__registered_by=request.user)
+        elif request.user.is_super_admin:
+            registered_by_param = request.query_params.get("registered_by")
+            if registered_by_param:
+                qs = qs.filter(restaurant__registered_by_id=registered_by_param)
+
         qs = filter_orders(qs, request)
 
         serializer = OrderListSerializer(
@@ -501,6 +524,11 @@ class AdminOrderDetailView(APIView):
                 "deal",
                 "happy_hour",
             ).get(pk=pk)
+            if request.user.is_employee_admin and order.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only view orders for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Order.DoesNotExist:
             return Response(
                 {
@@ -547,7 +575,9 @@ class AdminAcceptOrderView(APIView):
 
     def post(self, request, pk):
         try:
-            order = Order.objects.get(pk=pk)
+            order = Order.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and order.restaurant.registered_by_id != request.user.id:
+                return Response({"success": False, "message": "Permission denied. You can only manage orders for restaurants registered under your reference."}, status=status.HTTP_403_FORBIDDEN)
         except Order.DoesNotExist:
             return Response(
                 {
@@ -588,7 +618,9 @@ class AdminRejectOrderView(APIView):
 
     def post(self, request, pk):
         try:
-            order = Order.objects.get(pk=pk)
+            order = Order.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and order.restaurant.registered_by_id != request.user.id:
+                return Response({"success": False, "message": "Permission denied. You can only manage orders for restaurants registered under your reference."}, status=status.HTTP_403_FORBIDDEN)
         except Order.DoesNotExist:
             return Response(
                 {
@@ -629,7 +661,9 @@ class AdminCompleteOrderView(APIView):
 
     def post(self, request, pk):
         try:
-            order = Order.objects.get(pk=pk)
+            order = Order.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and order.restaurant.registered_by_id != request.user.id:
+                return Response({"success": False, "message": "Permission denied. You can only manage orders for restaurants registered under your reference."}, status=status.HTTP_403_FORBIDDEN)
         except Order.DoesNotExist:
             return Response(
                 {
@@ -650,6 +684,30 @@ class AdminCompleteOrderView(APIView):
 
         order.mark_completed()
 
+        deal_or_hh_title = (
+            order.deal.title if order.deal
+            else (order.happy_hour.title if order.happy_hour else "Deal")
+        )
+
+        create_notification(
+            user=order.user,
+            type="order",
+            title=f"Booking Completed {order.order_number}",
+            message=f"Your booking at {order.restaurant.name} has been completed.",
+            related_order=order,
+            related_restaurant=order.restaurant,
+            related_deal=order.deal,
+            related_happy_hour=order.happy_hour,
+            metadata={
+                "action_type": "review",
+                "restaurant_id": order.restaurant.id,
+                "restaurant_name": order.restaurant.name,
+                "deal_title": deal_or_hh_title,
+                "item_name": deal_or_hh_title,
+                "order_type": order.order_type,
+            },
+        )
+
         return Response(
             {
                 "success": True,
@@ -667,7 +725,9 @@ class AdminCancelOrderView(APIView):
 
     def post(self, request, pk):
         try:
-            order = Order.objects.get(pk=pk)
+            order = Order.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and order.restaurant.registered_by_id != request.user.id:
+                return Response({"success": False, "message": "Permission denied. You can only manage orders for restaurants registered under your reference."}, status=status.HTTP_403_FORBIDDEN)
         except Order.DoesNotExist:
             return Response(
                 {
@@ -705,6 +765,8 @@ class AdminAcceptAllOrdersView(APIView):
 
     def post(self, request):
         qs = Order.objects.filter(status="pending")
+        if request.user.is_employee_admin:
+            qs = qs.filter(restaurant__registered_by=request.user)
         count = qs.count()
 
         for order in qs:

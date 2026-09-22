@@ -76,8 +76,8 @@ class Deal(models.Model):
     price = models.DecimalField(max_digits=8, decimal_places=2)
 
     food_type = models.CharField(
-        max_length=50,
-        choices=FOOD_TYPE_CHOICES,
+        max_length=500,
+        blank=True,
         default="other",
     )
 

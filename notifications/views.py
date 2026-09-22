@@ -3,8 +3,8 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.utils import timezone
-from .models import Notification
-from .serializers import NotificationSerializer
+from .models import Notification, DeviceToken
+from .serializers import NotificationSerializer, DeviceTokenSerializer
 from .utils import check_and_expire_happy_hours
 
 class NotificationListView(APIView):
@@ -135,4 +135,68 @@ class DeleteNotificationView(APIView):
         return Response({
             "success": True,
             "message": "Notification deleted."
+        })
+
+
+class RegisterDeviceView(APIView):
+    """
+    POST /api/notifications/devices/register/
+    Payload: { "registration_id": "<FCM/APNs token>", "platform": "android" | "ios" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        registration_id = request.data.get('registration_id', '').strip()
+        platform = request.data.get('platform', 'android').strip().lower()
+
+        if not registration_id:
+            return Response({
+                "success": False,
+                "message": "registration_id is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        if platform not in ['android', 'ios', 'web']:
+            platform = 'android'
+
+        # Associate this token with current user, reactivating if needed
+        device, created = DeviceToken.objects.update_or_create(
+            registration_id=registration_id,
+            defaults={
+                'user': request.user,
+                'platform': platform,
+                'is_active': True,
+            }
+        )
+
+        serializer = DeviceTokenSerializer(device)
+        return Response({
+            "success": True,
+            "message": "Device registered successfully.",
+            "data": serializer.data
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class UnregisterDeviceView(APIView):
+    """
+    POST /api/notifications/devices/unregister/
+    Payload: { "registration_id": "<FCM/APNs token>" }
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        registration_id = request.data.get('registration_id', '').strip()
+        if not registration_id:
+            return Response({
+                "success": False,
+                "message": "registration_id is required."
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        updated_count = DeviceToken.objects.filter(
+            user=request.user,
+            registration_id=registration_id
+        ).update(is_active=False)
+
+        return Response({
+            "success": True,
+            "message": f"Device {'unregistered' if updated_count else 'not found'}."
         })

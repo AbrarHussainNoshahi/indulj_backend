@@ -1,3 +1,4 @@
+import json
 from django.utils import timezone
 from math import ceil
 
@@ -11,10 +12,11 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from accounts.models import User
 from accounts.permissions import IsAdmin, IsRestaurant
 
-from .models import Restaurant, RestaurantGallery, Review
+from .models import Restaurant, RestaurantGallery, Review, RestaurantMenuItem
 from .serializers import (
     CreateRestaurantSerializer,
     GallerySerializer,
+    RestaurantMenuItemSerializer,
     RestaurantDetailSerializer,
     RestaurantListSerializer,
     UpdateRestaurantSerializer,
@@ -32,7 +34,14 @@ class AdminRestaurantListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
-        qs = Restaurant.objects.select_related("owner").all()
+        qs = Restaurant.objects.select_related("owner", "registered_by").filter(owner__isnull=False)
+
+        if request.user.is_employee_admin:
+            qs = qs.filter(registered_by=request.user)
+        elif request.user.is_super_admin:
+            registered_by_param = request.query_params.get("registered_by")
+            if registered_by_param:
+                qs = qs.filter(registered_by_id=registered_by_param)
 
         search = request.query_params.get("search")
         if search:
@@ -88,6 +97,19 @@ class AdminCreateRestaurantView(APIView):
             is_email_verified=True,
         )
 
+        registered_by = None
+        if request.user.is_employee_admin:
+            registered_by = request.user
+        elif request.user.is_super_admin:
+            reg_id = data.get("registered_by_id")
+            if reg_id:
+                try:
+                    registered_by = User.objects.get(id=reg_id, role="admin")
+                except User.DoesNotExist:
+                    registered_by = request.user
+            else:
+                registered_by = request.user
+
         restaurant = Restaurant.objects.create(
             owner=owner,
             name=data["restaurant_name"],
@@ -100,6 +122,7 @@ class AdminCreateRestaurantView(APIView):
             latitude=data.get("latitude"),
             longitude=data.get("longitude"),
             status="active",
+            registered_by=registered_by,
         )
 
         return Response(
@@ -119,14 +142,17 @@ class AdminRestaurantDetailView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    def get_object(self, pk):
+    def get_object(self, request, pk):
         try:
-            return Restaurant.objects.select_related("owner").get(pk=pk)
+            restaurant = Restaurant.objects.select_related("owner", "registered_by").filter(owner__isnull=False).get(pk=pk)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
+                return None
+            return restaurant
         except Restaurant.DoesNotExist:
             return None
 
     def get(self, request, pk):
-        restaurant = self.get_object(pk)
+        restaurant = self.get_object(request, pk)
 
         if not restaurant:
             return Response(
@@ -147,8 +173,11 @@ class AdminRestaurantDetailView(APIView):
             }
         )
 
+    def patch(self, request, pk):
+        return self.put(request, pk)
+
     def put(self, request, pk):
-        restaurant = self.get_object(pk)
+        restaurant = self.get_object(request, pk)
 
         if not restaurant:
             return Response(
@@ -188,7 +217,7 @@ class AdminRestaurantDetailView(APIView):
         )
 
     def delete(self, request, pk):
-        restaurant = self.get_object(pk)
+        restaurant = self.get_object(request, pk)
 
         if not restaurant:
             return Response(
@@ -218,6 +247,11 @@ class AdminSuspendRestaurantView(APIView):
     def post(self, request, pk):
         try:
             restaurant = Restaurant.objects.select_related("owner").get(pk=pk)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only suspend restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
         except Restaurant.DoesNotExist:
             return Response(
                 {
@@ -229,20 +263,71 @@ class AdminSuspendRestaurantView(APIView):
 
         if restaurant.status == "suspended":
             restaurant.status = "active"
-            restaurant.owner.is_suspended = False
+            if restaurant.owner:
+                restaurant.owner.is_suspended = False
             message = "Restaurant reactivated"
         else:
             restaurant.status = "suspended"
-            restaurant.owner.is_suspended = True
+            if restaurant.owner:
+                restaurant.owner.is_suspended = True
             message = "Restaurant suspended"
 
         restaurant.save(update_fields=["status"])
-        restaurant.owner.save(update_fields=["is_suspended"])
+        if restaurant.owner:
+            restaurant.owner.save(update_fields=["is_suspended"])
 
         return Response(
             {
                 "success": True,
                 "message": message,
+            }
+        )
+
+
+
+class AdminChangeRestaurantPlanView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            restaurant = Restaurant.objects.select_related("owner").get(pk=pk)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only change plans for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except Restaurant.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Restaurant not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        new_plan = (request.data.get("subscription_plan") or request.data.get("plan") or "").lower().strip()
+        if new_plan not in ["basic", "starter", "premium"]:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Invalid plan. Choose 'basic', 'starter', or 'premium'.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        restaurant.subscription_plan = new_plan
+        restaurant.save(update_fields=["subscription_plan"])
+
+        return Response(
+            {
+                "success": True,
+                "message": f"Restaurant plan updated to {new_plan.capitalize()}",
+                "data": {
+                    "id": restaurant.id,
+                    "name": restaurant.name,
+                    "subscription_plan": restaurant.subscription_plan,
+                    "plan": restaurant.subscription_plan,
+                },
             }
         )
 
@@ -390,6 +475,201 @@ class MyRestaurantGalleryView(APIView):
         )
 
 
+
+
+class MyRestaurantMenuView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurant]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        try:
+            restaurant = Restaurant.objects.get(owner=request.user)
+        except Restaurant.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Restaurant not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        name = request.data.get("name")
+        if not name or not str(name).strip():
+            return Response(
+                {
+                    "success": False,
+                    "message": "Menu name is required",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        price = request.data.get("price", "")
+        description = request.data.get("description") or request.data.get("bio") or ""
+        categories_raw = request.data.get("categories", [])
+
+        categories = []
+        if isinstance(categories_raw, str):
+            try:
+                parsed = json.loads(categories_raw)
+                if isinstance(parsed, list):
+                    categories = [str(c).strip().strip('"').strip("'") for c in parsed if str(c).strip()]
+                elif isinstance(parsed, str):
+                    categories = [parsed.strip().strip('"').strip("'")]
+            except Exception:
+                cleaned = categories_raw.strip().lstrip("[").rstrip("]")
+                categories = [c.strip().strip('"').strip("'") for c in cleaned.split(",") if c.strip()]
+        elif isinstance(categories_raw, list):
+            for item in categories_raw:
+                if isinstance(item, str) and item.startswith("[") and item.endswith("]"):
+                    try:
+                        sub = json.loads(item)
+                        if isinstance(sub, list):
+                            categories.extend([str(x).strip().strip('"').strip("'") for x in sub if str(x).strip()])
+                            continue
+                    except Exception:
+                        pass
+                categories.append(str(item).strip().strip('"').strip("'"))
+
+        # Deduplicate and remove empty
+        clean_categories = []
+        for c in categories:
+            clean_c = str(c).strip().strip('"').strip("'").lstrip("[").rstrip("]")
+            if clean_c and clean_c not in clean_categories:
+                clean_categories.append(clean_c)
+        categories = clean_categories
+
+        image = request.FILES.get("image") or request.FILES.get("picture")
+
+        menu_item = RestaurantMenuItem.objects.create(
+            restaurant=restaurant,
+            name=str(name).strip(),
+            price=str(price).strip(),
+            categories=categories,
+            description=str(description).strip(),
+            image=image,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Menu item added successfully",
+                "data": RestaurantMenuItemSerializer(
+                    menu_item,
+                    context={"request": request},
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, item_id):
+        try:
+            restaurant = Restaurant.objects.get(owner=request.user)
+            item = RestaurantMenuItem.objects.get(
+                id=item_id,
+                restaurant=restaurant,
+            )
+        except (Restaurant.DoesNotExist, RestaurantMenuItem.DoesNotExist):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Menu item not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        item.delete()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Menu item deleted successfully",
+            }
+        )
+
+    def put(self, request, item_id):
+        try:
+            restaurant = Restaurant.objects.get(owner=request.user)
+            item = RestaurantMenuItem.objects.get(
+                id=item_id,
+                restaurant=restaurant,
+            )
+        except (Restaurant.DoesNotExist, RestaurantMenuItem.DoesNotExist):
+            return Response(
+                {
+                    "success": False,
+                    "message": "Menu item not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        name = request.data.get("name")
+        if name is not None:
+            if not str(name).strip():
+                return Response(
+                    {
+                        "success": False,
+                        "message": "Menu name cannot be empty",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            item.name = str(name).strip()
+
+        if "price" in request.data:
+            item.price = str(request.data.get("price", "")).strip()
+
+        if "description" in request.data or "bio" in request.data:
+            desc = request.data.get("description") if "description" in request.data else request.data.get("bio")
+            item.description = str(desc or "").strip()
+
+        if "categories" in request.data:
+            categories_raw = request.data.get("categories", [])
+            categories = []
+            if isinstance(categories_raw, str):
+                try:
+                    parsed = json.loads(categories_raw)
+                    if isinstance(parsed, list):
+                        categories = [str(c).strip().strip('"').strip("'") for c in parsed if str(c).strip()]
+                    elif isinstance(parsed, str):
+                        categories = [parsed.strip().strip('"').strip("'")]
+                except Exception:
+                    cleaned = categories_raw.strip().lstrip("[").rstrip("]")
+                    categories = [c.strip().strip('"').strip("'") for c in cleaned.split(",") if c.strip()]
+            elif isinstance(categories_raw, list):
+                for item_cat in categories_raw:
+                    if isinstance(item_cat, str) and item_cat.startswith("[") and item_cat.endswith("]"):
+                        try:
+                            sub = json.loads(item_cat)
+                            if isinstance(sub, list):
+                                categories.extend([str(x).strip().strip('"').strip("'") for x in sub if str(x).strip()])
+                                continue
+                        except Exception:
+                            pass
+                    categories.append(str(item_cat).strip().strip('"').strip("'"))
+
+            clean_categories = []
+            for c in categories:
+                clean_c = str(c).strip().strip('"').strip("'").lstrip("[").rstrip("]")
+                if clean_c and clean_c not in clean_categories:
+                    clean_categories.append(clean_c)
+            item.categories = clean_categories
+
+        image = request.FILES.get("image") or request.FILES.get("picture")
+        if image:
+            item.image = image
+
+        item.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Menu item updated successfully",
+                "data": RestaurantMenuItemSerializer(
+                    item,
+                    context={"request": request},
+                ).data,
+            }
+        )
+
 class PublicRestaurantListView(APIView):
     permission_classes = [AllowAny]
 
@@ -441,6 +721,15 @@ class PublicRestaurantDetailView(APIView):
                 {
                     "success": False,
                     "message": "Restaurant not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not restaurant.owner_id:
+            return Response(
+                {
+                    "success": False,
+                    "message": "This restaurant is not registered.",
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
@@ -812,37 +1101,38 @@ class AddRestaurantReviewView(APIView):
                 status=400,
             )
 
-        if Review.objects.filter(
+        existing_review = Review.objects.filter(
             restaurant=restaurant,
             user=request.user,
-        ).exists():
-            return Response(
-                {
-                    "success": False,
-                    "message": "You already reviewed this restaurant.",
-                },
-                status=400,
-            )
+        ).first()
 
-        review = Review.objects.create(
-            restaurant=restaurant,
-            user=request.user,
-            rating=serializer.validated_data["rating"],
-            comment=serializer.validated_data.get("comment", ""),
-        )
+        if existing_review:
+            existing_review.rating = serializer.validated_data["rating"]
+            existing_review.comment = serializer.validated_data.get("comment", "")
+            existing_review.save(update_fields=["rating", "comment", "updated_at"])
+            review = existing_review
+            created = False
+        else:
+            review = Review.objects.create(
+                restaurant=restaurant,
+                user=request.user,
+                rating=serializer.validated_data["rating"],
+                comment=serializer.validated_data.get("comment", ""),
+            )
+            created = True
 
         restaurant.update_rating()
 
         return Response(
             {
                 "success": True,
-                "message": "Review added successfully.",
+                "message": "Review added successfully." if created else "Review updated successfully.",
                 "data": ReviewSerializer(
                     review,
                     context={"request": request},
                 ).data,
             },
-            status=201,
+            status=201 if created else 200,
         )
 
 class EditMyReviewView(APIView):

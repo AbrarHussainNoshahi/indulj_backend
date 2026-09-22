@@ -776,7 +776,14 @@ class AdminHappyHourListView(APIView):
 
     def get(self, request):
         check_and_expire_happy_hours()
-        qs = HappyHour.objects.select_related("restaurant", "submitted_by").all()
+        qs = HappyHour.objects.select_related("restaurant", "submitted_by").filter(restaurant__status="active")
+
+        if request.user.is_employee_admin:
+            qs = qs.filter(restaurant__registered_by=request.user)
+        elif request.user.is_super_admin:
+            registered_by_param = request.query_params.get("registered_by")
+            if registered_by_param:
+                qs = qs.filter(restaurant__registered_by_id=registered_by_param)
 
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
@@ -811,14 +818,17 @@ class AdminHappyHourDetailView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
-    def get_object(self, pk):
+    def get_object(self, request, pk):
         try:
-            return HappyHour.objects.select_related("restaurant", "submitted_by").get(pk=pk)
+            hh = HappyHour.objects.select_related("restaurant", "submitted_by").get(pk=pk)
+            if request.user.is_employee_admin and hh.restaurant.registered_by_id != request.user.id:
+                return None
+            return hh
         except HappyHour.DoesNotExist:
             return None
 
     def get(self, request, pk):
-        happy_hour = self.get_object(pk)
+        happy_hour = self.get_object(request, pk)
 
         if not happy_hour:
             return Response(
@@ -835,7 +845,7 @@ class AdminHappyHourDetailView(APIView):
         })
 
     def put(self, request, pk):
-        happy_hour = self.get_object(pk)
+        happy_hour = self.get_object(request, pk)
 
         if not happy_hour:
             return Response(
@@ -879,7 +889,7 @@ class AdminHappyHourDetailView(APIView):
         )
 
     def delete(self, request, pk):
-        happy_hour = self.get_object(pk)
+        happy_hour = self.get_object(request, pk)
 
         if not happy_hour:
             return Response(
@@ -898,6 +908,11 @@ class AdminAcceptHappyHourView(APIView):
     def post(self, request, pk):
         try:
             happy_hour = HappyHour.objects.select_related("restaurant", "submitted_by", "restaurant__owner").get(pk=pk)
+            if request.user.is_employee_admin and happy_hour.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only approve happy hours for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except HappyHour.DoesNotExist:
             return Response(
                 {"success": False, "message": "Happy hour not found"},
@@ -979,6 +994,11 @@ class AdminRejectHappyHourView(APIView):
     def post(self, request, pk):
         try:
             happy_hour = HappyHour.objects.select_related("restaurant", "submitted_by", "restaurant__owner").get(pk=pk)
+            if request.user.is_employee_admin and happy_hour.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only reject happy hours for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except HappyHour.DoesNotExist:
             return Response(
                 {"success": False, "message": "Happy hour not found"},
@@ -1026,7 +1046,10 @@ class AdminAcceptAllHappyHoursView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        pending = HappyHour.objects.filter(status="pending").select_related("restaurant", "submitted_by", "restaurant__owner")
+        pending_qs = HappyHour.objects.filter(status="pending").select_related("restaurant", "submitted_by", "restaurant__owner")
+        if request.user.is_employee_admin:
+            pending_qs = pending_qs.filter(restaurant__registered_by=request.user)
+        pending = pending_qs
         count = 0
         now = timezone.localtime(timezone.now()) if timezone.is_aware(timezone.now()) else timezone.now()
         for hh in pending:

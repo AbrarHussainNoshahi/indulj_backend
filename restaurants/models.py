@@ -10,10 +10,33 @@ class Restaurant(models.Model):
         ("newly_joined", "Newly Joined"),
     ]
 
+    SUBSCRIPTION_PLAN_CHOICES = [
+        ("basic", "Basic"),
+        ("starter", "Starter"),
+        ("premium", "Premium"),
+    ]
+
+    subscription_plan = models.CharField(
+        max_length=20,
+        choices=SUBSCRIPTION_PLAN_CHOICES,
+        default="basic",
+    )
+
     owner = models.OneToOneField(
         User,
         on_delete=models.CASCADE,
         related_name="restaurant",
+        null=True,
+        blank=True,
+    )
+
+    registered_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="registered_restaurants",
+        help_text="Admin/Employee who registered this restaurant",
     )
 
     name = models.CharField(max_length=200)
@@ -139,3 +162,22 @@ class Review(models.Model):
 
     def __str__(self):
         return f"{self.user.full_name} → {self.restaurant.name} ({self.rating}★)"
+
+class RestaurantMenuItem(models.Model):
+    restaurant = models.ForeignKey(
+        Restaurant,
+        on_delete=models.CASCADE,
+        related_name="menu_items",
+    )
+    name = models.CharField(max_length=200)
+    price = models.CharField(max_length=50)
+    categories = models.JSONField(default=list, blank=True)
+    description = models.TextField(blank=True)
+    image = models.ImageField(upload_to="restaurants/menus/", null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.restaurant.name} - {self.name}"

@@ -11,7 +11,7 @@ class AdminCreateDealSerializer(serializers.Serializer):
     description = serializers.CharField()
     price = serializers.DecimalField(max_digits=8, decimal_places=2)
 
-    food_type = serializers.ChoiceField(choices=Deal.FOOD_TYPE_CHOICES)
+    food_type = serializers.CharField(required=False, allow_blank=True, default="other")
     day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES)
 
     has_time_slots = serializers.BooleanField(default=False)
@@ -53,12 +53,17 @@ class DealListSerializer(serializers.ModelSerializer):
     )
 
     restaurant_categories = serializers.SerializerMethodField()
+    food_types = serializers.SerializerMethodField()
 
     image_url = serializers.SerializerMethodField()
     is_saved = serializers.SerializerMethodField()
 
     latitude = serializers.FloatField(source="restaurant.latitude", read_only=True)
     longitude = serializers.FloatField(source="restaurant.longitude", read_only=True)
+    restaurant_is_registered = serializers.SerializerMethodField()
+
+    def get_restaurant_is_registered(self, obj):
+        return bool(obj.restaurant and obj.restaurant.owner_id is not None)
 
     class Meta:
         model = Deal
@@ -68,6 +73,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "food_type",
+            "food_types",
             "day_of_week",
             "start_time",
             "end_time",
@@ -85,6 +91,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "restaurant_name",
             "restaurant_city",
             "restaurant_categories",
+            "restaurant_is_registered",
             "submitted_by_name",
             "created_by_role",
             "is_saved",
@@ -110,6 +117,25 @@ class DealListSerializer(serializers.ModelSerializer):
             return obj.restaurant.categories or []
         except Exception:
             return []
+
+    def get_food_types(self, obj):
+        val = obj.food_type
+        if not val:
+            return []
+        if isinstance(val, list):
+            return [str(x).strip().replace("_", " ") for x in val if str(x).strip()]
+        if isinstance(val, str):
+            val_strip = val.strip()
+            if val_strip.startswith("[") and val_strip.endswith("]"):
+                try:
+                    import json
+                    parsed = json.loads(val_strip)
+                    if isinstance(parsed, list):
+                        return [str(x).strip().replace("_", " ") for x in parsed if str(x).strip()]
+                except Exception:
+                    pass
+            return [s.strip().replace("_", " ") for s in val.split(",") if s.strip()]
+        return [str(val)]
 
     # ─────────────────────────────
     # SAVE STATUS (FIXED PROPERLY)
@@ -142,7 +168,7 @@ class SubmitDealSerializer(serializers.Serializer):
 
     price = serializers.DecimalField(max_digits=8, decimal_places=2)
 
-    food_type = serializers.ChoiceField(choices=Deal.FOOD_TYPE_CHOICES)
+    food_type = serializers.CharField(required=False, allow_blank=True, default="other")
     day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES)
 
     has_time_slots = serializers.BooleanField(default=False)
@@ -159,6 +185,7 @@ class SubmitDealSerializer(serializers.Serializer):
 # CREATE DEAL (MODEL)
 # ─────────────────────────────────────────────
 class CreateDealSerializer(serializers.ModelSerializer):
+    food_type = serializers.CharField(required=False, allow_blank=True, default="other")
     class Meta:
         model = Deal
         fields = [
@@ -166,6 +193,7 @@ class CreateDealSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "food_type",
+            "food_types",
             "day_of_week",
             "start_time",
             "end_time",

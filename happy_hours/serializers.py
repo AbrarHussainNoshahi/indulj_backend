@@ -32,6 +32,10 @@ class HappyHourListSerializer(serializers.ModelSerializer):
 
     image_url = serializers.SerializerMethodField()
     time_slots = serializers.SerializerMethodField()
+    restaurant_is_registered = serializers.SerializerMethodField()
+
+    def get_restaurant_is_registered(self, obj):
+        return bool(obj.restaurant and obj.restaurant.owner_id is not None)
 
     class Meta:
         model = HappyHour
@@ -67,6 +71,7 @@ class HappyHourListSerializer(serializers.ModelSerializer):
             "restaurant_rating",
             "restaurant_reviews",
             "restaurant_categories",
+            "restaurant_is_registered",
             "submitted_by_name",
             "latitude",
             "longitude",

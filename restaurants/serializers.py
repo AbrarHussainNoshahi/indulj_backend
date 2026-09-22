@@ -1,7 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 import json
-from .models import Restaurant, RestaurantGallery, Review
+from .models import Restaurant, RestaurantGallery, Review, RestaurantMenuItem
 
 User = get_user_model()
 
@@ -90,6 +90,11 @@ class RestaurantListSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(source="owner.email", read_only=True)
     total_deals = serializers.SerializerMethodField()
     total_happy_hours = serializers.SerializerMethodField()
+    is_registered = serializers.SerializerMethodField()
+    plan = serializers.CharField(source="subscription_plan", read_only=True)
+    registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
+    registered_by_name = serializers.SerializerMethodField()
+    registered_by_email = serializers.EmailField(source="registered_by.email", read_only=True, allow_null=True)
 
     class Meta:
         model = Restaurant
@@ -100,6 +105,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "city",
             "categories",
             "operating_hours",
+            "subscription_plan",
             "rating",
             "total_reviews",
             "logo_url",
@@ -108,6 +114,12 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "owner_email",
             "total_deals",
             "total_happy_hours",
+            "is_registered",
+            "subscription_plan",
+            "plan",
+            "registered_by_id",
+            "registered_by_name",
+            "registered_by_email",
             "created_at",
         ]
 
@@ -125,15 +137,54 @@ class RestaurantListSerializer(serializers.ModelSerializer):
     def get_total_happy_hours(self, obj):
         return obj.happy_hours.count()
 
+    def get_is_registered(self, obj):
+        return bool(obj.owner_id is not None)
+
+    def get_registered_by_name(self, obj):
+        if obj.registered_by:
+            return obj.registered_by.full_name or obj.registered_by.email
+        return None
+
+
+class RestaurantMenuItemSerializer(serializers.ModelSerializer):
+    image_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RestaurantMenuItem
+        fields = [
+            "id",
+            "name",
+            "price",
+            "categories",
+            "description",
+            "image",
+            "image_url",
+            "created_at",
+        ]
+
+    def get_image_url(self, obj):
+        if not obj.image:
+            return None
+        request = self.context.get("request")
+        if request:
+            return request.build_absolute_uri(obj.image.url)
+        return obj.image.url
+
 class RestaurantDetailSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
     cover_image_url = serializers.SerializerMethodField()
     gallery = GallerySerializer(many=True, read_only=True)
+    menu_items = RestaurantMenuItemSerializer(many=True, read_only=True)
     reviews = ReviewSerializer(many=True, read_only=True)
     owner = OwnerSerializer(read_only=True)
 
     total_deals = serializers.SerializerMethodField()
     total_happy_hours = serializers.SerializerMethodField()
+    is_registered = serializers.SerializerMethodField()
+    plan = serializers.CharField(source="subscription_plan", read_only=True)
+    registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
+    registered_by_name = serializers.SerializerMethodField()
+    registered_by_email = serializers.EmailField(source="registered_by.email", read_only=True, allow_null=True)
 
     class Meta:
         model = Restaurant
@@ -152,14 +203,22 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
             "email",
             "categories",
             "operating_hours",
+            "subscription_plan",
             "rating",
             "total_reviews",
             "status",
             "gallery",
+            "menu_items",
             "reviews",
             "owner",
             "total_deals",
             "total_happy_hours",
+            "is_registered",
+            "subscription_plan",
+            "plan",
+            "registered_by_id",
+            "registered_by_name",
+            "registered_by_email",
             "created_at",
         ]
 
@@ -190,6 +249,14 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
     def get_total_happy_hours(self, obj):
         return obj.happy_hours.count()
 
+    def get_is_registered(self, obj):
+        return bool(obj.owner_id is not None)
+
+    def get_registered_by_name(self, obj):
+        if obj.registered_by:
+            return obj.registered_by.full_name or obj.registered_by.email
+        return None
+
 
 class CreateRestaurantSerializer(serializers.Serializer):
     owner_name = serializers.CharField()
@@ -197,6 +264,7 @@ class CreateRestaurantSerializer(serializers.Serializer):
     password = serializers.CharField(min_length=6)
     phone = serializers.CharField(required=False, allow_blank=True)
 
+    registered_by_id = serializers.IntegerField(required=False, allow_null=True)
     restaurant_name = serializers.CharField()
     location = serializers.CharField()
     city = serializers.CharField(required=False, default="", allow_blank=True)
@@ -273,6 +341,7 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
             "email",
             "categories",
             "operating_hours",
+            "subscription_plan",
 
             # owner update fields
             "owner_name",

@@ -1,3 +1,23 @@
+
+def normalize_food_type_input(raw):
+    if not raw:
+        return "other"
+    if isinstance(raw, list):
+        items = [str(x).strip().replace("_", " ") for x in raw if str(x).strip()]
+        return ", ".join(items) if items else "other"
+    if isinstance(raw, str):
+        trimmed = raw.strip()
+        if trimmed.startswith("[") and trimmed.endswith("]"):
+            try:
+                import json
+                parsed = json.loads(trimmed)
+                if isinstance(parsed, list):
+                    items = [str(x).strip().replace("_", " ") for x in parsed if str(x).strip()]
+                    return ", ".join(items) if items else "other"
+            except Exception:
+                pass
+        return trimmed or "other"
+    return str(raw)
 from django.db import IntegrityError
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -46,7 +66,7 @@ class PublicDealListView(APIView):
 
         food_type = request.query_params.get("food_type")
         if food_type:
-            qs = qs.filter(food_type=food_type)
+            qs = qs.filter(Q(food_type__icontains=food_type) | Q(food_type__icontains=food_type.replace("_", " ")))
 
         day = request.query_params.get("day_of_week")
         if day:
@@ -203,12 +223,10 @@ class SubmitDealView(APIView):
                 restaurant = Restaurant.objects.filter(name__icontains=restaurant_name, status="active").first()
 
         if not restaurant:
-            restaurant = Restaurant.objects.filter(status="active").first()
-
-        if not restaurant:
             restaurant = Restaurant.objects.create(
                 name=restaurant_name or "Partner Restaurant",
                 city=data.get("location_branch") or "New York",
+                address=data.get("location_branch") or "",
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
@@ -226,7 +244,7 @@ class SubmitDealView(APIView):
             title=data.get("title") or f"{restaurant.name} Deal",
             description=data.get("description"),
             price=data.get("price"),
-            food_type=data.get("food_type"),
+            food_type=normalize_food_type_input(request.data.get("food_type") or data.get("food_type")),
             day_of_week=data.get("day_of_week"),
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
@@ -241,6 +259,7 @@ class SubmitDealView(APIView):
             title="New Deal Submitted",
             message=f"A new deal '{deal.title}' has been submitted for approval.",
             related_deal=deal,
+            related_restaurant=restaurant,
         )
 
         if restaurant.owner:
@@ -361,7 +380,7 @@ class SavedDealsView(APIView):
     permission_classes = [IsAuthenticated, IsUser]
 
     def get(self, request):
-        saved = SavedDeal.objects.filter(user=request.user).select_related(
+        saved = SavedDeal.objects.filter(user=request.user, deal__restaurant__status="active").select_related(
             "deal__restaurant"
         )
 
@@ -431,7 +450,10 @@ class RestaurantCreateDealView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        serializer = CreateDealSerializer(data=request.data)
+        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if 'food_type' in req_data:
+            req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
+        serializer = CreateDealSerializer(data=req_data)
 
         if not serializer.is_valid():
             return Response(
@@ -443,20 +465,23 @@ class RestaurantCreateDealView(APIView):
             restaurant=restaurant,
             submitted_by=request.user,
             created_by_role="restaurant",
-            status="pending",
+            status="active",
         )
+
+        send_deal_notification_emails(deal)
 
         notify_admins(
             type="deal",
-            title="New Deal Submitted",
-            message=f"A new deal '{deal.title}' has been submitted for approval.",
+            title="New Deal Created",
+            message=f"Restaurant '{restaurant.name}' created a new deal '{deal.title}'.",
             related_deal=deal,
+            related_restaurant=restaurant,
         )
 
         return Response(
             {
                 "success": True,
-                "message": "Deal created. Pending admin approval.",
+                "message": "Deal created successfully.",
                 "data": DealListSerializer(deal, context={"request": request}).data,
             },
             status=status.HTTP_201_CREATED,
@@ -489,27 +514,18 @@ class RestaurantUpdateDeleteDealView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if deal.status == "active":
-            return Response(
-                {"success": False, "message": "Active deals cannot be edited directly."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        serializer = CreateDealSerializer(deal, data=request.data, partial=True)
+        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if 'food_type' in req_data:
+            req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
+        serializer = CreateDealSerializer(deal, data=req_data, partial=True)
 
         if serializer.is_valid():
-            serializer.save(status="pending", rejection_reason="")
-
-            notify_admins(
-                type="deal",
-                title="New Deal Submitted",
-                message=f"A new deal '{deal.title}' has been submitted for approval.",
-                related_deal=deal,
-            )
+            new_status = deal.status if deal.status in ["active", "draft", "cancelled"] else "active"
+            serializer.save(status=new_status, rejection_reason="")
 
             return Response({
                 "success": True,
-                "message": "Deal updated. Pending admin approval again.",
+                "message": "Deal updated successfully.",
                 "data": DealListSerializer(deal, context={"request": request}).data,
             })
 
@@ -530,15 +546,97 @@ class RestaurantUpdateDeleteDealView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if deal.status == "active":
-            return Response(
-                {"success": False, "message": "Active deals cannot be deleted directly."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
         deal.delete()
         return Response({"success": True, "message": "Deal deleted"})
 
+
+class RestaurantApproveDealView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurant]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.get(
+                pk=pk,
+                restaurant__owner=request.user,
+                status="pending",
+            )
+        except Deal.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Deal not found or not pending approval"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        deal.status = "active"
+        deal.rejection_reason = ""
+        deal.save(update_fields=["status", "rejection_reason"])
+
+        if deal.submitted_by:
+            from accounts.models import PointsTransaction
+            submitter = deal.submitted_by
+            submitter.points += 50
+            submitter.save(update_fields=["points"])
+            PointsTransaction.objects.create(
+                user=submitter,
+                text=f"Deal submitted - {deal.title}",
+                status="approved",
+                points=50,
+            )
+            create_notification(
+                user=deal.submitted_by,
+                type="deal",
+                title="Deal Approved! 🎉",
+                message=f"Your deal '{deal.title}' has been approved by the restaurant.",
+                related_deal=deal,
+            )
+
+        send_deal_notification_emails(deal)
+
+        return Response({
+            "success": True,
+            "message": f"Deal '{deal.title}' approved successfully",
+        })
+
+
+class RestaurantRejectDealView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurant]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.get(
+                pk=pk,
+                restaurant__owner=request.user,
+                status="pending",
+            )
+        except Deal.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Deal not found or not pending approval"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        serializer = RejectDealSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        deal.status = "rejected"
+        deal.rejection_reason = serializer.validated_data.get("rejection_reason", "Rejected by restaurant")
+        deal.save(update_fields=["status", "rejection_reason"])
+
+        if deal.submitted_by:
+            create_notification(
+                user=deal.submitted_by,
+                type="deal",
+                title="Deal Rejected",
+                message=f"Your deal '{deal.title}' was rejected by the restaurant. Reason: {deal.rejection_reason}",
+                related_deal=deal,
+            )
+
+        return Response({
+            "success": True,
+            "message": f"Deal '{deal.title}' rejected",
+        })
 
 # ADMIN
 
@@ -560,30 +658,38 @@ class AdminCreateDealView(APIView):
 
         data = serializer.validated_data
 
+        restaurant_name = data["restaurant_name"]
         restaurant = Restaurant.objects.filter(
-            name__icontains=data["restaurant_name"],
+            name__iexact=restaurant_name,
             status="active",
         ).first()
+        if not restaurant:
+            restaurant = Restaurant.objects.filter(
+                name__icontains=restaurant_name,
+                status="active",
+            ).first()
+
+        if restaurant and request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
+            return Response(
+                {"success": False, "message": "Permission denied. You can only create deals for restaurants registered under your reference."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
         if not restaurant:
-            return Response(
-                {
-                    "success": False,
-                    "message": f"Restaurant '{data['restaurant_name']}' not found or not active.",
-                },
-                status=status.HTTP_404_NOT_FOUND,
+            restaurant = Restaurant.objects.create(
+                name=restaurant_name,
+                city=data.get("location_branch") or "New York",
+                address=data.get("location_branch") or "",
+                status="active",
+                operating_hours={"open": "09:00", "close": "23:00"},
+                registered_by=request.user if request.user.is_employee_admin else None
             )
 
-        # Check if restaurant operating hours are set
+        # Check / set operating hours
         operating_hours = restaurant.operating_hours
         if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
-            return Response(
-                {
-                    "success": False,
-                    "message": f"Restaurant '{restaurant.name}' has not configured its operating hours yet. Deals cannot be created for it."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
+            restaurant.save(update_fields=["operating_hours"])
 
         deal = Deal.objects.create(
             restaurant=restaurant,
@@ -592,7 +698,7 @@ class AdminCreateDealView(APIView):
             title=data["title"],
             description=data["description"],
             price=data["price"],
-            food_type=data["food_type"],
+            food_type=normalize_food_type_input(request.data.get("food_type") or data.get("food_type")),
             day_of_week=data["day_of_week"],
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
@@ -703,7 +809,14 @@ class AdminDealListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
-        qs = Deal.objects.select_related("restaurant", "submitted_by").all()
+        qs = Deal.objects.select_related("restaurant", "submitted_by").filter(restaurant__status="active")
+
+        if request.user.is_employee_admin:
+            qs = qs.filter(restaurant__registered_by=request.user)
+        elif request.user.is_super_admin:
+            registered_by_param = request.query_params.get("registered_by")
+            if registered_by_param:
+                qs = qs.filter(restaurant__registered_by_id=registered_by_param)
 
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
@@ -715,7 +828,7 @@ class AdminDealListView(APIView):
 
         food_type = request.query_params.get("food_type")
         if food_type:
-            qs = qs.filter(food_type=food_type)
+            qs = qs.filter(Q(food_type__icontains=food_type) | Q(food_type__icontains=food_type.replace("_", " ")))
 
         restaurant = request.query_params.get("restaurant")
         if restaurant:
@@ -735,7 +848,12 @@ class AdminApproveDealView(APIView):
 
     def post(self, request, pk):
         try:
-            deal = Deal.objects.get(pk=pk, status="pending")
+            deal = Deal.objects.select_related("restaurant").get(pk=pk, status="pending")
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only approve deals for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Deal.DoesNotExist:
             return Response(
                 {"success": False, "message": "Deal not found or not pending approval"},
@@ -787,7 +905,12 @@ class AdminToggleHotDealView(APIView):
 
     def post(self, request, pk):
         try:
-            deal = Deal.objects.get(pk=pk)
+            deal = Deal.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Deal.DoesNotExist:
             return Response(
                 {"success": False, "message": "Deal not found"},
@@ -809,7 +932,12 @@ class AdminRejectDealView(APIView):
 
     def post(self, request, pk):
         try:
-            deal = Deal.objects.get(pk=pk)
+            deal = Deal.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied. You can only reject deals for restaurants registered under your reference."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Deal.DoesNotExist:
             return Response(
                 {"success": False, "message": "Deal not found"},
@@ -855,7 +983,10 @@ class AdminAcceptAllDealsView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        pending = list(Deal.objects.filter(status="pending").select_related("restaurant"))
+        pending_qs = Deal.objects.filter(status="pending").select_related("restaurant")
+        if request.user.is_employee_admin:
+            pending_qs = pending_qs.filter(restaurant__registered_by=request.user)
+        pending = list(pending_qs)
         count = len(pending)
 
         Deal.objects.filter(id__in=[d.id for d in pending]).update(status="active", rejection_reason="")
@@ -875,7 +1006,12 @@ class AdminDeleteDealView(APIView):
 
     def delete(self, request, pk):
         try:
-            deal = Deal.objects.get(pk=pk)
+            deal = Deal.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Deal.DoesNotExist:
             return Response(
                 {"success": False, "message": "Deal not found"},
