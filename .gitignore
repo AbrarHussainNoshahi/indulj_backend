@@ -19,4 +19,4 @@ staticfiles/
 .vscode/
 .idea/
 indulj/settings_vps.py
-"firebase-service-account.json" 
+firebase-service-account.json 

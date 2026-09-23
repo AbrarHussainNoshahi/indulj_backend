@@ -461,3 +461,33 @@ class PartnerCreateUpdateSerializer(serializers.ModelSerializer):
                 ret["social_links"] = {}
         return ret
 
+
+class RestaurantRegisterSerializer(serializers.Serializer):
+    restaurant_name = serializers.CharField(max_length=200)
+    owner_name = serializers.CharField(max_length=255)
+    email = serializers.EmailField()
+    phone = serializers.CharField(max_length=20, required=False, allow_blank=True, default="")
+    location = serializers.CharField(max_length=500)
+    city = serializers.CharField(max_length=100, required=False, allow_blank=True, default="")
+    latitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
+    longitude = serializers.DecimalField(max_digits=9, decimal_places=6, required=True)
+    password = serializers.CharField(write_only=True, min_length=6)
+    confirm_password = serializers.CharField(write_only=True)
+    categories = serializers.ListField(
+        child=serializers.CharField(max_length=100), required=False, default=list
+    )
+    description = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def validate_email(self, value):
+        normalized = value.strip().lower()
+        if User.objects.filter(email__iexact=normalized, is_email_verified=True).exists():
+            raise serializers.ValidationError("An account with this email is already registered and verified.")
+        return normalized
+
+    def validate(self, data):
+        if data["password"] != data["confirm_password"]:
+            raise serializers.ValidationError(
+                {"confirm_password": "Passwords do not match."}
+            )
+        return data
+

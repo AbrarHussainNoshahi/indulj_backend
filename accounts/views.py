@@ -17,6 +17,7 @@ from .serializers import (
     NotificationPreferenceSerializer, RegisterSerializer,
     ResendOTPSerializer, UpdateProfileSerializer,
     UserSerializer, UserSessionSerializer, VerifyOTPSerializer,
+    RestaurantRegisterSerializer,
 )
 from .utils import (
     clear_auth_cookies, generate_otp, get_tokens_for_user,
@@ -103,6 +104,15 @@ class VerifyOTPView(APIView):
         if not user.is_email_verified:
             user.is_email_verified = True
             user.save(update_fields=["is_email_verified"])
+
+            if user.role == "restaurant" and hasattr(user, "restaurant") and user.restaurant:
+                rest = user.restaurant
+                rest.status = "active"
+                rest.subscription_plan = "basic"
+                if not rest.registered_by:
+                    super_admin = User.objects.filter(role="admin", admin_type="super_admin").first() or User.objects.filter(is_superuser=True).first()
+                    rest.registered_by = super_admin
+                rest.save(update_fields=["status", "subscription_plan", "registered_by"])
 
             if user.referred_by_code:
                 from .models import Referral, PointsTransaction
@@ -1338,3 +1348,77 @@ class PartnerDetailView(APIView):
             "success": True,
             "message": "Partner removed successfully.",
         })
+
+
+# ─── RESTAURANT REGISTER ──────────────────────────────────────────
+class RestaurantRegisterView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = RestaurantRegisterSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+        email = data["email"].strip().lower()
+
+        # Remove incomplete previous unverified signup if any
+        existing_user = User.objects.filter(email=email, is_email_verified=False).first()
+        if existing_user:
+            if hasattr(existing_user, "restaurant") and existing_user.restaurant:
+                existing_user.restaurant.delete()
+            existing_user.delete()
+
+        # Find super admin to register under
+        super_admin = User.objects.filter(role="admin", admin_type="super_admin").first()
+        if not super_admin:
+            super_admin = User.objects.filter(is_superuser=True).first()
+
+        user = User.objects.create_user(
+            email=email,
+            password=data["password"],
+            full_name=data["owner_name"],
+            phone_number=data.get("phone", ""),
+            role="restaurant",
+            is_email_verified=False,
+        )
+
+        from restaurants.models import Restaurant
+        restaurant = Restaurant.objects.create(
+            owner=user,
+            name=data["restaurant_name"],
+            address=data["location"],
+            city=data.get("city", ""),
+            phone=data.get("phone", ""),
+            email=email,
+            description=data.get("description", ""),
+            categories=data.get("categories", []),
+            latitude=data.get("latitude"),
+            longitude=data.get("longitude"),
+            status="active",
+            subscription_plan="basic",
+            registered_by=super_admin,
+        )
+
+        otp = generate_otp()
+        OTPVerification.objects.create(
+            user=user,
+            otp=otp,
+            expires_at=timezone.now() + timezone.timedelta(minutes=10),
+        )
+
+        send_otp_email(user.email, otp, user_name=user.full_name or restaurant.name)
+
+        return Response(
+            {
+                "success": True,
+                "message": "Restaurant registered successfully. Please verify your email with the OTP sent.",
+                "email": user.email,
+                "dev_otp": otp,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
