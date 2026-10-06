@@ -95,6 +95,8 @@ class RestaurantListSerializer(serializers.ModelSerializer):
     registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
     registered_by_name = serializers.SerializerMethodField()
     registered_by_email = serializers.EmailField(source="registered_by.email", read_only=True, allow_null=True)
+    menu_file_url = serializers.SerializerMethodField()
+    menu_file_name = serializers.CharField(read_only=True)
 
     class Meta:
         model = Restaurant
@@ -109,6 +111,8 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "rating",
             "total_reviews",
             "logo_url",
+            "menu_file_url",
+            "menu_file_name",
             "status",
             "owner_name",
             "owner_email",
@@ -122,6 +126,14 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "registered_by_email",
             "created_at",
         ]
+
+    def get_menu_file_url(self, obj):
+        request = self.context.get("request")
+        if obj.menu_file:
+            if request:
+                return request.build_absolute_uri(obj.menu_file.url)
+            return obj.menu_file.url
+        return None
 
     def get_logo_url(self, obj):
         request = self.context.get("request")
@@ -181,10 +193,14 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
     total_deals = serializers.SerializerMethodField()
     total_happy_hours = serializers.SerializerMethodField()
     is_registered = serializers.SerializerMethodField()
+    password = serializers.SerializerMethodField()
     plan = serializers.CharField(source="subscription_plan", read_only=True)
     registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
     registered_by_name = serializers.SerializerMethodField()
     registered_by_email = serializers.EmailField(source="registered_by.email", read_only=True, allow_null=True)
+    menu_file_url = serializers.SerializerMethodField()
+    menu_file_name = serializers.CharField(read_only=True)
+    menu_file_updated_at = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = Restaurant
@@ -195,6 +211,9 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
             "logo",
             "logo_url",
             "cover_image_url",
+            "menu_file_url",
+            "menu_file_name",
+            "menu_file_updated_at",
             "address",
             "city",
             "latitude",
@@ -214,6 +233,7 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
             "total_deals",
             "total_happy_hours",
             "is_registered",
+            "password",
             "subscription_plan",
             "plan",
             "registered_by_id",
@@ -221,6 +241,14 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
             "registered_by_email",
             "created_at",
         ]
+
+    def get_menu_file_url(self, obj):
+        request = self.context.get("request")
+        if obj.menu_file:
+            if request:
+                return request.build_absolute_uri(obj.menu_file.url)
+            return obj.menu_file.url
+        return None
 
     def get_logo_url(self, obj):
         request = self.context.get("request")
@@ -251,6 +279,12 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
 
     def get_is_registered(self, obj):
         return bool(obj.owner_id is not None)
+
+    def get_password(self, obj):
+        request = self.context.get("request")
+        if request and request.user and request.user.is_authenticated and getattr(request.user, "role", "") == "admin":
+            return obj.raw_password or ""
+        return None
 
     def get_registered_by_name(self, obj):
         if obj.registered_by:
@@ -333,6 +367,8 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
             "name",
             "description",
             "logo",
+            "menu_file",
+            "menu_file_name",
             "address",
             "city",
             "latitude",
@@ -368,8 +404,12 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
 
     def validate_owner_email(self, value):
         restaurant = self.instance
+        exclude_id = restaurant.owner.id if (restaurant and restaurant.owner) else None
 
-        if restaurant and User.objects.filter(email=value).exclude(id=restaurant.owner.id).exists():
+        qs = User.objects.filter(email=value)
+        if exclude_id:
+            qs = qs.exclude(id=exclude_id)
+        if qs.exists():
             raise serializers.ValidationError("Email already registered")
 
         return value
@@ -380,21 +420,42 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
         owner_phone = validated_data.pop("owner_phone", None)
         password = validated_data.pop("password", None)
 
+        if password:
+            instance.raw_password = password
+
         owner = instance.owner
 
-        if owner_name is not None:
-            owner.full_name = owner_name
+        if not owner:
+            if owner_email and password:
+                owner = User.objects.create_user(
+                    email=owner_email,
+                    password=password,
+                    full_name=owner_name or instance.name,
+                    phone_number=owner_phone or instance.phone or "",
+                    role="restaurant",
+                    is_email_verified=True,
+                )
+                instance.owner = owner
+                if owner_email:
+                    instance.email = owner_email
+                if owner_phone:
+                    instance.phone = owner_phone
+        else:
+            if owner_name is not None:
+                owner.full_name = owner_name
 
-        if owner_email is not None:
-            owner.email = owner_email
+            if owner_email is not None:
+                owner.email = owner_email
+                instance.email = owner_email
 
-        if owner_phone is not None:
-            owner.phone_number = owner_phone
+            if owner_phone is not None:
+                owner.phone_number = owner_phone
+                instance.phone = owner_phone
 
-        if password:
-            owner.set_password(password)
+            if password:
+                owner.set_password(password)
 
-        owner.save()
+            owner.save()
 
         return super().update(instance, validated_data)
     

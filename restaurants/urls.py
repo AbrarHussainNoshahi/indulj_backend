@@ -9,6 +9,7 @@ from .views import (
     MyRestaurantView,
     MyRestaurantGalleryView,
     MyRestaurantMenuView,
+    MyRestaurantFullMenuView,
     PublicRestaurantListView,
     PublicRestaurantDetailView,
 
@@ -46,6 +47,7 @@ urlpatterns = [
     path("my-restaurant/gallery/add/", MyRestaurantGalleryView.as_view()),
     path("my-restaurant/menu/add/", MyRestaurantMenuView.as_view()),
     path("my-restaurant/menu/<int:item_id>/", MyRestaurantMenuView.as_view()),
+    path("my-restaurant/menu-file/", MyRestaurantFullMenuView.as_view()),
     path(
         "my-restaurant/gallery/<int:image_id>/",
         MyRestaurantGalleryView.as_view(),

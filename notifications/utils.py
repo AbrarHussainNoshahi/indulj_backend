@@ -163,9 +163,45 @@ def check_and_expire_happy_hours():
                 )
 
         for hh in qs:
-            target_date = hh.date or now.date()
             if not hh.start_time or not hh.end_time:
                 continue
+
+            is_recurring_deal = getattr(hh, "is_deal", False) and (
+                not hh.date or (hh.days_of_week and len(hh.days_of_week) > 0)
+            )
+
+            if is_recurring_deal:
+                target_date = now.date()
+                start_datetime = datetime.datetime.combine(target_date, hh.start_time)
+                end_datetime = datetime.datetime.combine(target_date, hh.end_time)
+                if current_tz:
+                    start_datetime = timezone.make_aware(start_datetime, current_tz)
+                    end_datetime = timezone.make_aware(end_datetime, current_tz)
+
+                day_name = now.strftime("%A").lower()
+                is_weekday = now.weekday() < 5
+                is_weekend = now.weekday() >= 5
+                days_lower = [str(d).lower().strip() for d in (hh.days_of_week or [])]
+                matches_day = (
+                    not days_lower
+                    or "everyday" in days_lower
+                    or "all" in days_lower
+                    or day_name in days_lower
+                    or ("weekdays" in days_lower and is_weekday)
+                    or ("weekends" in days_lower and is_weekend)
+                )
+
+                if matches_day and now >= start_datetime and now < end_datetime:
+                    if hh.status != "active":
+                        hh.status = "active"
+                        hh.save(update_fields=["status", "updated_at"])
+                else:
+                    if hh.status != "upcoming":
+                        hh.status = "upcoming"
+                        hh.save(update_fields=["status", "updated_at"])
+                continue
+
+            target_date = hh.date or now.date()
 
             start_datetime = datetime.datetime.combine(target_date, hh.start_time)
             end_datetime = datetime.datetime.combine(target_date, hh.end_time)

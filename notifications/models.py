@@ -9,6 +9,7 @@ class Notification(models.Model):
         ('happy_hour', 'happy_hour'),
         ('favourite', 'favourite'),
         ('restaurant', 'restaurant'),
+        ('feedback', 'feedback'),
         ('system', 'system'),
     ]
 

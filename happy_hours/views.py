@@ -61,6 +61,13 @@ class PublicHappyHourListView(APIView):
         if is_featured in ["true", "1", "yes"]:
             qs = qs.filter(is_featured=True)
 
+        is_deal = request.query_params.get("is_deal")
+        if is_deal is not None:
+            if str(is_deal).lower() in ["true", "1", "yes"]:
+                qs = qs.filter(is_deal=True)
+            elif str(is_deal).lower() in ["false", "0", "no"]:
+                qs = qs.filter(is_deal=False)
+
         serializer = HappyHourListSerializer(
             qs,
             many=True,

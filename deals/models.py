@@ -110,6 +110,18 @@ class Deal(models.Model):
 
     expires_at = models.DateTimeField(null=True, blank=True)
 
+    # Duplicate detection fields
+    is_potential_duplicate = models.BooleanField(default=False)
+    duplicate_of = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="flagged_duplicates",
+    )
+    duplicate_score = models.FloatField(default=0.0)
+    duplicate_reasons = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

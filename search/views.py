@@ -2,10 +2,26 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
 from django.db.models import Q
+import math
 
 from restaurants.models import Restaurant
 from deals.models import Deal
 from happy_hours.models import HappyHour
+
+
+def calculate_haversine_distance(lat1, lon1, lat2, lon2):
+    """Returns distance in miles between two latitude/longitude points."""
+    R = 3958.8  # Earth radius in miles
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
 
 
 def build_absolute_image(request, image):
@@ -367,7 +383,7 @@ class SearchHappyHoursView(APIView):
 
 class MapDataView(APIView):
     """
-    GET /api/search/map/?city=Miami&day=sunday&type=deals
+    GET /api/search/map/?city=Miami&day=sunday&type=deals&lat=25.7617&lng=-80.1918&radius=30
     """
 
     permission_classes = [AllowAny]
@@ -375,7 +391,31 @@ class MapDataView(APIView):
     def get(self, request):
         city = request.query_params.get("city", "").strip()
         day = request.query_params.get("day", "").strip().lower()
-        data_type = request.query_params.get("type", "deals").strip()
+        data_type = request.query_params.get("type", "all").strip()
+
+        lat_param = request.query_params.get("lat") or request.query_params.get("latitude")
+        lng_param = request.query_params.get("lng") or request.query_params.get("longitude")
+        radius_param = request.query_params.get("radius")
+
+        user_lat = None
+        user_lng = None
+        if lat_param is not None and lng_param is not None:
+            try:
+                user_lat = float(lat_param)
+                user_lng = float(lng_param)
+            except (ValueError, TypeError):
+                user_lat = None
+                user_lng = None
+
+        max_radius = 50.0  # default 50 miles
+        if radius_param:
+            try:
+                if str(radius_param).strip().lower() in ["all", "none", "0", ""]:
+                    max_radius = None
+                else:
+                    max_radius = float(radius_param)
+            except (ValueError, TypeError):
+                pass
 
         result = {
             "deals": [],
@@ -394,14 +434,27 @@ class MapDataView(APIView):
                 .order_by("-is_hot_deal", "-created_at")
             )
 
-            if city:
+            if city and city.lower() != "all cities":
                 deal_qs = deal_qs.filter(restaurant__city__icontains=city)
 
-            if day:
+            if day and day.lower() != "all":
                 deal_qs = deal_qs.filter(day_filter_q(day))
 
-            result["deals"] = [
-                {
+            deal_items = []
+            for d in deal_qs:
+                try:
+                    d_lat = float(d.restaurant.latitude)
+                    d_lng = float(d.restaurant.longitude)
+                except (ValueError, TypeError):
+                    continue
+
+                dist = None
+                if user_lat is not None and user_lng is not None:
+                    dist = calculate_haversine_distance(user_lat, user_lng, d_lat, d_lng)
+                    if max_radius is not None and dist > max_radius:
+                        continue
+
+                deal_items.append({
                     "id": d.id,
                     "type": "deal",
                     "title": d.title,
@@ -419,13 +472,18 @@ class MapDataView(APIView):
                     "restaurant_name": d.restaurant.name,
                     "restaurant_city": d.restaurant.city,
                     "restaurant_address": d.restaurant.address,
-                    "latitude": float(d.restaurant.latitude),
-                    "longitude": float(d.restaurant.longitude),
+                    "latitude": d_lat,
+                    "longitude": d_lng,
                     "pin_type": "hot" if d.is_hot_deal else "regular",
                     "image_url": build_absolute_image(request, d.image),
-                }
-                for d in deal_qs
-            ]
+                    "distance_miles": round(dist, 1) if dist is not None else None,
+                    "distance_text": f"{round(dist, 1)} mi" if dist is not None else None,
+                })
+
+            if user_lat is not None and user_lng is not None:
+                deal_items.sort(key=lambda x: (x["distance_miles"] if x["distance_miles"] is not None else 999999))
+
+            result["deals"] = deal_items
 
         if data_type in ["all", "restaurants"]:
             rest_qs = Restaurant.objects.filter(
@@ -434,11 +492,24 @@ class MapDataView(APIView):
                 longitude__isnull=False,
             ).order_by("-rating")
 
-            if city:
+            if city and city.lower() != "all cities":
                 rest_qs = rest_qs.filter(city__icontains=city)
 
-            result["restaurants"] = [
-                {
+            rest_items = []
+            for r in rest_qs:
+                try:
+                    r_lat = float(r.latitude)
+                    r_lng = float(r.longitude)
+                except (ValueError, TypeError):
+                    continue
+
+                dist = None
+                if user_lat is not None and user_lng is not None:
+                    dist = calculate_haversine_distance(user_lat, user_lng, r_lat, r_lng)
+                    if max_radius is not None and dist > max_radius:
+                        continue
+
+                rest_items.append({
                     "id": r.id,
                     "type": "restaurant",
                     "name": r.name,
@@ -447,13 +518,18 @@ class MapDataView(APIView):
                     "rating": float(r.rating or 0),
                     "total_reviews": r.total_reviews,
                     "categories": r.categories,
-                    "latitude": float(r.latitude),
-                    "longitude": float(r.longitude),
+                    "latitude": r_lat,
+                    "longitude": r_lng,
                     "logo_url": build_absolute_image(request, getattr(r, "logo", None)),
                     "pin_type": "restaurant",
-                }
-                for r in rest_qs
-            ]
+                    "distance_miles": round(dist, 1) if dist is not None else None,
+                    "distance_text": f"{round(dist, 1)} mi" if dist is not None else None,
+                })
+
+            if user_lat is not None and user_lng is not None:
+                rest_items.sort(key=lambda x: (x["distance_miles"] if x["distance_miles"] is not None else 999999))
+
+            result["restaurants"] = rest_items
 
         return Response(
             {
@@ -462,6 +538,9 @@ class MapDataView(APIView):
                     "city": city,
                     "day": day,
                     "type": data_type,
+                    "user_latitude": user_lat,
+                    "user_longitude": user_lng,
+                    "radius_miles": max_radius,
                 },
                 "count": {
                     "deals": len(result["deals"]),

@@ -49,6 +49,113 @@ from notifications.email_service import (
 )
 
 
+def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_approved=True):
+    from happy_hours.models import HappyHour
+    from django.core.files.base import ContentFile
+    import datetime
+
+    def parse_time_value(val):
+        if not val:
+            return None
+        if isinstance(val, datetime.time):
+            return val
+        s = str(val).strip()
+        for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p"):
+            try:
+                return datetime.datetime.strptime(s, fmt).time()
+            except ValueError:
+                pass
+        try:
+            return datetime.datetime.strptime(s[:5], "%H:%M").time()
+        except Exception:
+            return None
+
+    s_time = (
+        parse_time_value(data.get("hh_start_time"))
+        or parse_time_value(data.get("start_time"))
+        or getattr(deal, "start_time", None)
+    )
+    e_time = (
+        parse_time_value(data.get("hh_end_time"))
+        or parse_time_value(data.get("end_time"))
+        or getattr(deal, "end_time", None)
+    )
+
+    if not s_time or not e_time:
+        op_hours = getattr(restaurant, "operating_hours", None) or {}
+        if not s_time:
+            open_str = op_hours.get("open") or op_hours.get("opening_time")
+            s_time = parse_time_value(open_str) or datetime.time(16, 0)
+
+        if not e_time:
+            close_str = op_hours.get("close") or op_hours.get("closing_time")
+            e_time = parse_time_value(close_str) or datetime.time(18, 0)
+
+    happy_hour_image = None
+    if deal.image:
+        try:
+            deal.image.open()
+            happy_hour_image = ContentFile(deal.image.read(), name=deal.image.name.split("/")[-1])
+        except Exception:
+            happy_hour_image = None
+
+    hh_discount = data.get("hh_discount_offer")
+    if not hh_discount:
+        if getattr(deal, "discount_percentage", None):
+            hh_discount = f"{deal.discount_percentage}% OFF"
+        elif getattr(deal, "price", None):
+            hh_discount = f"${deal.price}"
+        else:
+            hh_discount = ""
+
+    raw_event = str(data.get("hh_event_type") or "casual").lower().replace(" ", "_")
+    valid_events = [c[0] for c in HappyHour.EVENT_TYPE_CHOICES]
+    hh_event = raw_event if raw_event in valid_events else "casual"
+
+    raw_vibe = str(data.get("hh_vibe") or "casual").lower().replace(" ", "_")
+    valid_vibes = [c[0] for c in HappyHour.VIBE_CHOICES]
+    hh_vibe = raw_vibe if raw_vibe in valid_vibes else "casual"
+
+    status_val = "active" if is_approved else "pending"
+
+    # Enforce: "Each restaurant should have only one active Happy Hour Deal at a time."
+    if status_val == "active":
+        HappyHour.objects.filter(
+            restaurant=restaurant,
+            is_deal=True,
+            status="active"
+        ).update(status="expired")
+
+    hh_date = data.get("hh_date") or None
+
+    hh = HappyHour.objects.create(
+        deal=deal,
+        is_deal=True,
+        restaurant=restaurant,
+        submitted_by=user,
+        created_by_role=role,
+        title=deal.title,
+        description=deal.description or "",
+        group_size=int(data.get("hh_group_size") or 1),
+        event_type=hh_event,
+        vibe=hh_vibe,
+        date=hh_date,
+        start_time=s_time,
+        end_time=e_time,
+        days_of_week=[deal.day_of_week] if getattr(deal, "day_of_week", None) else ["everyday"],
+        location=data.get("location_branch") or getattr(deal, "location_branch", "") or restaurant.address or restaurant.city or "",
+        discount_offer=hh_discount,
+        status=status_val,
+        is_public=True,
+        image=happy_hour_image,
+    )
+
+    if hh.status == "active":
+        send_happy_hour_notification_emails(hh)
+
+    return hh
+
+
 # PUBLIC
 
 class PublicDealListView(APIView):
@@ -254,10 +361,46 @@ class SubmitDealView(APIView):
             status="pending",
         )
 
+        # Duplicate deal detection
+        try:
+            from .duplicate_detector import detect_deal_duplicates
+            is_dup, match_deal, score, reasons = detect_deal_duplicates(deal)
+            if is_dup and match_deal:
+                deal.is_potential_duplicate = True
+                deal.duplicate_of = match_deal
+                deal.duplicate_score = score
+                deal.duplicate_reasons = reasons
+                deal.save(update_fields=[
+                    "is_potential_duplicate",
+                    "duplicate_of",
+                    "duplicate_score",
+                    "duplicate_reasons",
+                ])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Duplicate detection check failed: {e}")
+
+        raw_post_hh = request.data.get("post_to_happy_hour")
+        post_to_hh = data.get("post_to_happy_hour") or (raw_post_hh in [True, "true", "True", "1", 1])
+        if post_to_hh:
+            create_linked_happy_hour_from_deal(
+                deal=deal,
+                restaurant=restaurant,
+                user=request.user,
+                role="user",
+                data=request.data,
+                is_approved=False
+            )
+
+        admin_notif_title = "Potential Duplicate Deal Submitted" if deal.is_potential_duplicate else "New Deal Submitted"
+        admin_notif_msg = f"A new deal '{deal.title}' has been submitted for approval."
+        if deal.is_potential_duplicate and deal.duplicate_of:
+            admin_notif_msg = f"⚠️ Potential Duplicate ({int(deal.duplicate_score)}% match with #{deal.duplicate_of.id}): '{deal.title}' submitted for {restaurant.name}."
+
         notify_admins(
             type="deal",
-            title="New Deal Submitted",
-            message=f"A new deal '{deal.title}' has been submitted for approval.",
+            title=admin_notif_title,
+            message=admin_notif_msg,
             related_deal=deal,
             related_restaurant=restaurant,
         )
@@ -468,6 +611,17 @@ class RestaurantCreateDealView(APIView):
             status="active",
         )
 
+        raw_post_hh = request.data.get("post_to_happy_hour")
+        if raw_post_hh in [True, "true", "True", "1", 1]:
+            create_linked_happy_hour_from_deal(
+                deal=deal,
+                restaurant=restaurant,
+                user=request.user,
+                role="restaurant",
+                data=request.data,
+                is_approved=True
+            )
+
         send_deal_notification_emails(deal)
 
         notify_admins(
@@ -589,6 +743,19 @@ class RestaurantApproveDealView(APIView):
                 related_deal=deal,
             )
 
+        from happy_hours.models import HappyHour
+        for hh in HappyHour.objects.filter(deal=deal, status="pending"):
+            HappyHour.objects.filter(
+                restaurant=deal.restaurant,
+                is_deal=True,
+                status="active"
+            ).exclude(pk=hh.pk).update(status="expired")
+            hh.status = "active"
+            hh.rejection_reason = ""
+            hh.accepted_at = timezone.now()
+            hh.save(update_fields=["status", "rejection_reason", "accepted_at", "updated_at"])
+            send_happy_hour_notification_emails(hh)
+
         send_deal_notification_emails(deal)
 
         return Response({
@@ -623,6 +790,13 @@ class RestaurantRejectDealView(APIView):
         deal.status = "rejected"
         deal.rejection_reason = serializer.validated_data.get("rejection_reason", "Rejected by restaurant")
         deal.save(update_fields=["status", "rejection_reason"])
+
+        from happy_hours.models import HappyHour
+        HappyHour.objects.filter(deal=deal, status="pending").update(
+            status="rejected",
+            rejection_reason=deal.rejection_reason,
+            rejected_at=timezone.now()
+        )
 
         if deal.submitted_by:
             create_notification(
@@ -711,83 +885,19 @@ class AdminCreateDealView(APIView):
             status=data.get("status", "active"),
         )
 
-        post_to_happy_hour = data.get("post_to_happy_hour", False)
+        post_to_happy_hour = data.get("post_to_happy_hour", False) or (request.data.get("post_to_happy_hour") in [True, "true", "True", "1", 1])
         if post_to_happy_hour:
-            from happy_hours.models import HappyHour
-            from django.core.files.base import ContentFile
-            import datetime
-
-            s_time = data.get("start_time")
-            e_time = data.get("end_time")
-
-            if not s_time or not e_time:
-                op_hours = restaurant.operating_hours or {}
-                if not s_time:
-                    open_str = op_hours.get("open") or op_hours.get("opening_time")
-                    if open_str:
-                        try:
-                            s_time = datetime.datetime.strptime(str(open_str)[:5], "%H:%M").time()
-                        except Exception:
-                            s_time = datetime.time(12, 0)
-                    else:
-                        s_time = datetime.time(12, 0)
-
-                if not e_time:
-                    close_str = op_hours.get("close") or op_hours.get("closing_time")
-                    if close_str:
-                        try:
-                            e_time = datetime.datetime.strptime(str(close_str)[:5], "%H:%M").time()
-                        except Exception:
-                            e_time = datetime.time(23, 59)
-                    else:
-                        e_time = datetime.time(23, 59)
-
-            happy_hour_image = None
-            if deal.image:
-                try:
-                    deal.image.open()
-                    happy_hour_image = ContentFile(deal.image.read(), name=deal.image.name.split("/")[-1])
-                except Exception:
-                    happy_hour_image = None
-
-            hh_discount = data.get("hh_discount_offer")
-            if not hh_discount:
-                if data.get("discount_percentage"):
-                    hh_discount = f"{data['discount_percentage']}% OFF"
-                elif data.get("price"):
-                    hh_discount = f"${data['price']}"
-                else:
-                    hh_discount = ""
-
-            hh_event = data.get("hh_event_type", "casual").lower().replace(" ", "_")
-            if hh_event not in [c[0] for c in HappyHour.EVENT_TYPE_CHOICES]:
-                hh_event = "casual"
-
-            hh_vibe = data.get("hh_vibe", "casual").lower().replace(" ", "_")
-            if hh_vibe not in [c[0] for c in HappyHour.VIBE_CHOICES]:
-                hh_vibe = "casual"
-
-            HappyHour.objects.create(
+            hh = create_linked_happy_hour_from_deal(
+                deal=deal,
                 restaurant=restaurant,
-                submitted_by=request.user,
-                created_by_role="admin",
-                title=data["title"],
-                description=data["description"],
-                group_size=data.get("hh_group_size", 1),
-                event_type=hh_event,
-                vibe=hh_vibe,
-                date=data.get("hh_date"),
-                start_time=s_time,
-                end_time=e_time,
-                days_of_week=[data["day_of_week"]] if data.get("day_of_week") else ["everyday"],
-                location=data.get("location_branch") or restaurant.address or restaurant.city or "",
-                discount_offer=hh_discount,
-                status="active" if data.get("status") == "active" else "upcoming",
-                is_public=True,
-                image=happy_hour_image,
+                user=request.user,
+                role="admin",
+                data=request.data if hasattr(request, "data") else data,
+                is_approved=(deal.status == "active")
             )
-            if hh.status in ["active", "upcoming"]:
-                send_happy_hour_notification_emails(hh)
+
+
+
 
         if deal.status == "active":
             send_deal_notification_emails(deal)
@@ -819,7 +929,9 @@ class AdminDealListView(APIView):
                 qs = qs.filter(restaurant__registered_by_id=registered_by_param)
 
         status_filter = request.query_params.get("status")
-        if status_filter and status_filter != "all":
+        if status_filter == "duplicates" or request.query_params.get("duplicates") in ["true", "1"]:
+            qs = qs.filter(is_potential_duplicate=True)
+        elif status_filter and status_filter != "all":
             qs = qs.filter(status=status_filter)
 
         search = request.query_params.get("search")
@@ -892,6 +1004,18 @@ class AdminApproveDealView(APIView):
                 message=f"Your deal '{deal.title}' has been approved.",
                 related_deal=deal,
             )
+        from happy_hours.models import HappyHour
+        for hh in HappyHour.objects.filter(deal=deal, status="pending"):
+            HappyHour.objects.filter(
+                restaurant=deal.restaurant,
+                is_deal=True,
+                status="active"
+            ).exclude(pk=hh.pk).update(status="expired")
+            hh.status = "active"
+            hh.rejection_reason = ""
+            hh.accepted_at = timezone.now()
+            hh.save(update_fields=["status", "rejection_reason", "accepted_at", "updated_at"])
+            send_happy_hour_notification_emails(hh)
 
         send_deal_notification_emails(deal)
 
@@ -956,6 +1080,13 @@ class AdminRejectDealView(APIView):
         deal.rejection_reason = serializer.validated_data["rejection_reason"]
         deal.save(update_fields=["status", "rejection_reason"])
 
+        from happy_hours.models import HappyHour
+        HappyHour.objects.filter(deal=deal, status="pending").update(
+            status="rejected",
+            rejection_reason=deal.rejection_reason,
+            rejected_at=timezone.now()
+        )
+
         if deal.submitted_by:
             create_notification(
                 user=deal.submitted_by,
@@ -983,21 +1114,38 @@ class AdminAcceptAllDealsView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def post(self, request):
-        pending_qs = Deal.objects.filter(status="pending").select_related("restaurant")
+        # Safeguard: Exclude flagged potential duplicates from bulk auto-accept to ensure manual admin review
+        pending_qs = Deal.objects.filter(status="pending", is_potential_duplicate=False).select_related("restaurant")
         if request.user.is_employee_admin:
             pending_qs = pending_qs.filter(restaurant__registered_by=request.user)
         pending = list(pending_qs)
         count = len(pending)
 
+        skipped_duplicates = Deal.objects.filter(status="pending", is_potential_duplicate=True).count()
+
         Deal.objects.filter(id__in=[d.id for d in pending]).update(status="active", rejection_reason="")
 
+        from happy_hours.models import HappyHour
         for deal in pending:
             deal.status = "active"
             send_deal_notification_emails(deal)
+            for hh in HappyHour.objects.filter(deal=deal, status="pending"):
+                HappyHour.objects.filter(
+                    restaurant=deal.restaurant,
+                    is_deal=True,
+                    status="active"
+                ).exclude(pk=hh.pk).update(status="expired")
+                hh.status = "active"
+                hh.rejection_reason = ""
+                hh.accepted_at = timezone.now()
+                hh.save(update_fields=["status", "rejection_reason", "accepted_at", "updated_at"])
+                send_happy_hour_notification_emails(hh)
 
+        skipped_msg = f" ({skipped_duplicates} flagged duplicate(s) held for manual review)" if skipped_duplicates > 0 else ""
         return Response({
             "success": True,
-            "message": f"{count} pending deals approved",
+            "message": f"{count} pending deals approved{skipped_msg}",
+            "skipped_duplicates_count": skipped_duplicates,
         })
 
 

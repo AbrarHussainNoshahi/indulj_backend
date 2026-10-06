@@ -58,6 +58,15 @@ class HappyHour(models.Model):
         default="user",
     )
 
+    deal = models.ForeignKey(
+        "deals.Deal",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="linked_happy_hours",
+    )
+    is_deal = models.BooleanField(default=False)
+
     title = models.CharField(max_length=200)
     description = models.TextField(blank=True)
 
@@ -120,3 +129,41 @@ class HappyHour(models.Model):
 
     def __str__(self):
         return f"{self.title} @ {self.restaurant.name}"
+
+    def is_live_now(self):
+        from django.utils import timezone
+        import datetime
+
+        if self.status not in ["active", "upcoming"]:
+            return False
+
+        now = timezone.localtime(timezone.now()) if timezone.is_aware(timezone.now()) else timezone.now()
+        today = now.date()
+        current_time = now.time()
+
+        if self.date and self.date != today:
+            return False
+
+        if self.days_of_week and isinstance(self.days_of_week, list) and len(self.days_of_week) > 0:
+            day_name = now.strftime("%A").lower()
+            is_weekday = now.weekday() < 5
+            is_weekend = now.weekday() >= 5
+
+            days_lower = [str(d).lower().strip() for d in self.days_of_week]
+            matches_day = (
+                "everyday" in days_lower
+                or "all" in days_lower
+                or day_name in days_lower
+                or ("weekdays" in days_lower and is_weekday)
+                or ("weekends" in days_lower and is_weekend)
+            )
+            if not matches_day:
+                return False
+
+        if self.start_time and self.end_time:
+            if self.start_time <= self.end_time:
+                return self.start_time <= current_time <= self.end_time
+            else:
+                return current_time >= self.start_time or current_time <= self.end_time
+
+        return self.status == "active"

@@ -64,11 +64,20 @@ class NotificationSerializer(serializers.ModelSerializer):
         return None
 
     def get_action_url(self, obj):
+        if obj.metadata and isinstance(obj.metadata, dict) and obj.metadata.get('action_url'):
+            return obj.metadata.get('action_url')
+
         request = self.context.get('request')
         user = request.user if request else None
         role = getattr(user, 'role', 'user') if user else 'user'
 
-        if obj.type == 'order':
+        if obj.type == 'feedback':
+            if role == 'admin':
+                feedback_id = obj.metadata.get('feedback_id') if isinstance(obj.metadata, dict) else None
+                return f'/admin/dashboard/feedback?id={feedback_id}' if feedback_id else '/admin/dashboard/feedback'
+            return '/dashboard'
+
+        elif obj.type == 'order':
             if role == 'restaurant':
                 return '/restaurant/dashboard/res_orders'
             elif role == 'admin':
@@ -101,3 +110,4 @@ class NotificationSerializer(serializers.ModelSerializer):
                 return '/restaurants'
 
         return ''
+

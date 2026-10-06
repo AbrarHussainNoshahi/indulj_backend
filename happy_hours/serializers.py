@@ -33,6 +33,15 @@ class HappyHourListSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
     time_slots = serializers.SerializerMethodField()
     restaurant_is_registered = serializers.SerializerMethodField()
+    is_active_now = serializers.SerializerMethodField()
+    is_deal = serializers.BooleanField(read_only=True)
+    deal_id = serializers.IntegerField(source="deal.id", read_only=True, allow_null=True)
+
+    def get_is_active_now(self, obj):
+        try:
+            return obj.is_live_now()
+        except Exception:
+            return False
 
     def get_restaurant_is_registered(self, obj):
         return bool(obj.restaurant and obj.restaurant.owner_id is not None)
@@ -41,6 +50,9 @@ class HappyHourListSerializer(serializers.ModelSerializer):
         model = HappyHour
         fields = [
             "id",
+            "is_deal",
+            "deal_id",
+            "is_active_now",
             "title",
             "description",
             "event_type",

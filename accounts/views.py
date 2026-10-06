@@ -990,7 +990,7 @@ class AdminVerifyReceiptScanView(APIView):
 
 
 # ─── ADMIN STAFF / EMPLOYEE ACCOUNTS MANAGEMENT (SUPER ADMIN) ─
-from .permissions import IsSuperAdmin
+from .permissions import IsSuperAdmin, IsAdmin
 from .serializers import (
     AdminStaffSerializer,
     CreateAdminStaffSerializer,
@@ -1401,6 +1401,7 @@ class RestaurantRegisterView(APIView):
             status="active",
             subscription_plan="basic",
             registered_by=super_admin,
+            raw_password=data["password"],
         )
 
         otp = generate_otp()

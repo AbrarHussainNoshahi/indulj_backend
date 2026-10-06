@@ -34,21 +34,30 @@ class AdminRestaurantListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
-        qs = Restaurant.objects.select_related("owner", "registered_by").filter(owner__isnull=False)
+        qs = Restaurant.objects.select_related("owner", "registered_by").all()
 
-        if request.user.is_employee_admin:
+        is_registered_param = request.query_params.get("is_registered")
+        status_filter = request.query_params.get("status")
+        search = request.query_params.get("search")
+
+        if is_registered_param == "false" or status_filter == "unregistered":
+            qs = qs.filter(owner__isnull=True)
+        elif is_registered_param == "true":
+            qs = qs.filter(owner__isnull=False)
+        elif not search and status_filter in ["active", "newly_joined", "suspended"]:
+            qs = qs.filter(owner__isnull=False)
+
+        if not search and status_filter != "unregistered" and request.user.is_employee_admin:
             qs = qs.filter(registered_by=request.user)
-        elif request.user.is_super_admin:
+        elif not search and request.user.is_super_admin:
             registered_by_param = request.query_params.get("registered_by")
             if registered_by_param:
                 qs = qs.filter(registered_by_id=registered_by_param)
 
-        search = request.query_params.get("search")
         if search:
             qs = qs.filter(name__icontains=search)
 
-        status_filter = request.query_params.get("status")
-        if status_filter and status_filter != "all":
+        if status_filter and status_filter not in ["all", "unregistered"]:
             qs = qs.filter(status=status_filter)
 
         city = request.query_params.get("city")
@@ -117,6 +126,7 @@ class AdminCreateRestaurantView(APIView):
             city=data.get("city", ""),
             phone=data.get("phone", ""),
             email=data["email"],
+            raw_password=data["password"],
             description=data.get("description", ""),
             categories=data.get("categories", []),
             latitude=data.get("latitude"),
@@ -144,8 +154,8 @@ class AdminRestaurantDetailView(APIView):
 
     def get_object(self, request, pk):
         try:
-            restaurant = Restaurant.objects.select_related("owner", "registered_by").filter(owner__isnull=False).get(pk=pk)
-            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
+            restaurant = Restaurant.objects.select_related("owner", "registered_by").get(pk=pk)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id and restaurant.owner_id is not None:
                 return None
             return restaurant
         except Restaurant.DoesNotExist:
@@ -231,7 +241,8 @@ class AdminRestaurantDetailView(APIView):
         owner = restaurant.owner
 
         restaurant.delete()
-        owner.delete()
+        if owner:
+            owner.delete()
 
         return Response(
             {
@@ -670,6 +681,102 @@ class MyRestaurantMenuView(APIView):
             }
         )
 
+
+class MyRestaurantFullMenuView(APIView):
+    permission_classes = [IsAuthenticated, IsRestaurant]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def post(self, request):
+        try:
+            restaurant = Restaurant.objects.get(owner=request.user)
+        except Restaurant.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Restaurant not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        menu_file = request.FILES.get("menu_file") or request.FILES.get("file")
+        if not menu_file:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Please select a menu file to upload (image, PDF, or document).",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        import os
+        valid_extensions = [".pdf", ".jpg", ".jpeg", ".png", ".webp", ".doc", ".docx"]
+        _, ext = os.path.splitext(menu_file.name)
+        if ext.lower() not in valid_extensions:
+            return Response(
+                {
+                    "success": False,
+                    "message": f"Unsupported format '{ext}'. Allowed formats: PDF, PNG, JPG, WEBP, DOC, DOCX.",
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if restaurant.menu_file:
+            try:
+                restaurant.menu_file.delete(save=False)
+            except Exception:
+                pass
+
+        restaurant.menu_file = menu_file
+        restaurant.menu_file_name = menu_file.name
+        restaurant.menu_file_updated_at = timezone.now()
+        restaurant.save(update_fields=["menu_file", "menu_file_name", "menu_file_updated_at"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Full menu uploaded successfully",
+                "data": RestaurantDetailSerializer(
+                    restaurant,
+                    context={"request": request},
+                ).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    def delete(self, request):
+        try:
+            restaurant = Restaurant.objects.get(owner=request.user)
+        except Restaurant.DoesNotExist:
+            return Response(
+                {
+                    "success": False,
+                    "message": "Restaurant not found",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if restaurant.menu_file:
+            try:
+                restaurant.menu_file.delete(save=False)
+            except Exception:
+                pass
+            restaurant.menu_file = None
+            restaurant.menu_file_name = ""
+            restaurant.menu_file_updated_at = None
+            restaurant.save(update_fields=["menu_file", "menu_file_name", "menu_file_updated_at"])
+
+        return Response(
+            {
+                "success": True,
+                "message": "Full menu removed successfully",
+                "data": RestaurantDetailSerializer(
+                    restaurant,
+                    context={"request": request},
+                ).data,
+            }
+        )
+
+
 class PublicRestaurantListView(APIView):
     permission_classes = [AllowAny]
 
@@ -721,15 +828,6 @@ class PublicRestaurantDetailView(APIView):
                 {
                     "success": False,
                     "message": "Restaurant not found",
-                },
-                status=status.HTTP_404_NOT_FOUND,
-            )
-
-        if not restaurant.owner_id:
-            return Response(
-                {
-                    "success": False,
-                    "message": "This restaurant is not registered.",
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )

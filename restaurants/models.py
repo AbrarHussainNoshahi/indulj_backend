@@ -67,9 +67,18 @@ class Restaurant(models.Model):
 
     phone = models.CharField(max_length=20, blank=True)
     email = models.EmailField(blank=True)
+    raw_password = models.CharField(max_length=255, blank=True, default="")
 
     categories = models.JSONField(default=list, blank=True)
     operating_hours = models.JSONField(default=dict, blank=True)
+
+    menu_file = models.FileField(
+        upload_to="restaurants/menus/full/",
+        null=True,
+        blank=True,
+    )
+    menu_file_name = models.CharField(max_length=255, blank=True, default="")
+    menu_file_updated_at = models.DateTimeField(null=True, blank=True)
 
     rating = models.DecimalField(max_digits=3, decimal_places=1, default=0.0)
     total_reviews = models.IntegerField(default=0)

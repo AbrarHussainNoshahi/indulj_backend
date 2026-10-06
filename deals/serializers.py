@@ -62,8 +62,28 @@ class DealListSerializer(serializers.ModelSerializer):
     longitude = serializers.FloatField(source="restaurant.longitude", read_only=True)
     restaurant_is_registered = serializers.SerializerMethodField()
 
+    duplicate_of_id = serializers.IntegerField(source="duplicate_of.id", read_only=True)
+    duplicate_of_title = serializers.CharField(source="duplicate_of.title", read_only=True)
+    duplicate_of = serializers.SerializerMethodField()
+
     def get_restaurant_is_registered(self, obj):
         return bool(obj.restaurant and obj.restaurant.owner_id is not None)
+
+    def get_duplicate_of(self, obj):
+        if not obj.duplicate_of:
+            return None
+        d = obj.duplicate_of
+        return {
+            "id": d.id,
+            "title": d.title,
+            "price": str(d.price),
+            "discount_percentage": d.discount_percentage,
+            "day_of_week": d.day_of_week,
+            "status": d.status,
+            "created_at": d.created_at,
+            "submitted_by_name": d.submitted_by.full_name if d.submitted_by else "Restaurant/Admin",
+            "description": d.description,
+        }
 
     class Meta:
         model = Deal
@@ -97,6 +117,12 @@ class DealListSerializer(serializers.ModelSerializer):
             "is_saved",
             "latitude",
             "longitude",
+            "is_potential_duplicate",
+            "duplicate_of_id",
+            "duplicate_of_title",
+            "duplicate_of",
+            "duplicate_score",
+            "duplicate_reasons",
             "created_at",
         ]
 
@@ -179,6 +205,15 @@ class SubmitDealSerializer(serializers.Serializer):
     title = serializers.CharField(required=False, allow_blank=True, default="")
 
     image = serializers.ImageField(required=False, allow_null=True)
+
+    post_to_happy_hour = serializers.BooleanField(required=False, default=False)
+    hh_date = serializers.DateField(required=False, allow_null=True)
+    hh_start_time = serializers.CharField(required=False, allow_blank=True, default="")
+    hh_end_time = serializers.CharField(required=False, allow_blank=True, default="")
+    hh_group_size = serializers.IntegerField(required=False, default=1)
+    hh_event_type = serializers.CharField(required=False, allow_blank=True, default="casual")
+    hh_vibe = serializers.CharField(required=False, allow_blank=True, default="casual")
+    hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 # ─────────────────────────────────────────────

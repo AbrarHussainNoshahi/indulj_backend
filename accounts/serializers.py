@@ -1,3 +1,4 @@
+import json
 from rest_framework import serializers
 from .models import User, NotificationPreference, UserSession, Referral, PointsTransaction, ReceiptScan, Partner
 
@@ -438,6 +439,7 @@ class PartnerSerializer(serializers.ModelSerializer):
 class PartnerCreateUpdateSerializer(serializers.ModelSerializer):
     social_links = serializers.JSONField(required=False, default=dict)
     designation = serializers.CharField(required=False, allow_blank=True, default="Partner")
+    is_active = serializers.BooleanField(required=False, default=True)
 
     class Meta:
         model = Partner
@@ -459,6 +461,12 @@ class PartnerCreateUpdateSerializer(serializers.ModelSerializer):
                 ret["social_links"] = json.loads(social)
             except Exception:
                 ret["social_links"] = {}
+        # QueryDict from multipart forms sets missing boolean fields to False.
+        # Ensure is_active defaults to True unless explicitly passed as false.
+        if "is_active" not in data:
+            ret["is_active"] = True
+        elif isinstance(data.get("is_active"), str):
+            ret["is_active"] = data.get("is_active").lower() in ["true", "1", "yes"]
         return ret
 
 
