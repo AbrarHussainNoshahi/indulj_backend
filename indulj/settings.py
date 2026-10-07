@@ -44,6 +44,7 @@ INSTALLED_APPS = [
     "analytics",
     "search",
     "feedback",
+    "contact",
 ]
 
 MIDDLEWARE = [
@@ -261,5 +262,8 @@ EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default=EMAIL_HOST_USER or "noreply@indulj.com")
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 EMAIL_TIMEOUT = 20
+
+# SuperAdmin contact recipient email (can be set in .env)
+SUPERADMIN_CONTACT_EMAIL = config("SUPERADMIN_CONTACT_EMAIL", default="admin@indulj.com")
 
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
