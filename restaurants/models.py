@@ -1,6 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator, MaxValueValidator
 from accounts.models import User
+from .document_storage import document_storage
 
 
 class Restaurant(models.Model):
@@ -11,15 +12,14 @@ class Restaurant(models.Model):
     ]
 
     SUBSCRIPTION_PLAN_CHOICES = [
-        ("basic", "Basic"),
-        ("starter", "Starter"),
+        ("free", "Free"),
         ("premium", "Premium"),
     ]
 
     subscription_plan = models.CharField(
         max_length=20,
         choices=SUBSCRIPTION_PLAN_CHOICES,
-        default="basic",
+        default="free",
     )
 
     owner = models.OneToOneField(
@@ -74,6 +74,7 @@ class Restaurant(models.Model):
 
     menu_file = models.FileField(
         upload_to="restaurants/menus/full/",
+        storage=document_storage,
         null=True,
         blank=True,
     )

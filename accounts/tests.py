@@ -183,3 +183,118 @@ class PointsRewardsTests(APITestCase):
         tx.refresh_from_db()
         self.assertEqual(tx.status, "approved")
         self.assertEqual(tx.points, 25)
+
+
+class RegistrationEmailTests(APITestCase):
+    def setUp(self):
+        self.admin = User.objects.create_superuser(
+            email="superadmin@example.com",
+            password="Password123!",
+            full_name="Super Admin",
+        )
+
+    def test_admin_create_restaurant_sends_email(self):
+        from unittest.mock import patch
+        self.client.force_authenticate(user=self.admin)
+
+        with patch("accounts.registration_emails.send_restaurant_registration_email") as mock_email:
+            response = self.client.post("/api/restaurants/create/", {
+                "restaurant_name": "Email Test Bistro",
+                "email": "bistro@example.com",
+                "password": "SecretPassword123",
+                "owner_name": "Chef Mario",
+                "location": "456 Food St",
+                "city": "Chicago",
+                "phone": "555-1234",
+                "latitude": 41.8781,
+                "longitude": -87.6298,
+            })
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            mock_email.assert_called_once_with(
+                restaurant_name="Email Test Bistro",
+                owner_name="Chef Mario",
+                email="bistro@example.com",
+                password="SecretPassword123",
+            )
+
+    def test_admin_register_unregistered_restaurant_sends_email(self):
+        from unittest.mock import patch
+        # Create an unregistered restaurant
+        unregistered = Restaurant.objects.create(
+            name="Unregistered Cafe",
+            address="789 Street",
+            city="New York",
+            owner=None,
+        )
+
+        self.client.force_authenticate(user=self.admin)
+        with patch("accounts.registration_emails.send_restaurant_registration_email") as mock_email:
+            response = self.client.put(f"/api/restaurants/{unregistered.id}/update/", {
+                "name": "Registered Cafe",
+                "owner_name": "Cafe Owner",
+                "owner_email": "cafeowner@example.com",
+                "password": "CafePassword456",
+            })
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            mock_email.assert_called_once_with(
+                restaurant_name="Registered Cafe",
+                owner_name="Cafe Owner",
+                email="cafeowner@example.com",
+                password="CafePassword456",
+            )
+
+    def test_super_admin_create_sub_admin_sends_email(self):
+        from unittest.mock import patch
+        self.client.force_authenticate(user=self.admin)
+
+        with patch("accounts.registration_emails.send_sub_admin_registration_email") as mock_email:
+            response = self.client.post("/api/auth/admin/staff/create/", {
+                "full_name": "John Subadmin",
+                "email": "john.subadmin@example.com",
+                "password": "SubadminPassword789",
+                "designation": "Regional Manager",
+                "admin_type": "employee",
+            })
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            mock_email.assert_called_once()
+            call_kwargs = mock_email.call_args[1]
+            self.assertEqual(call_kwargs["full_name"], "John Subadmin")
+            self.assertEqual(call_kwargs["email"], "john.subadmin@example.com")
+            self.assertEqual(call_kwargs["password"], "SubadminPassword789")
+            self.assertEqual(call_kwargs["designation"], "Regional Manager")
+            self.assertEqual(call_kwargs["admin_type"], "employee")
+
+    def test_email_html_templates_contain_credentials(self):
+        from accounts.registration_emails import (
+            build_restaurant_registration_email_html,
+            build_sub_admin_registration_email_html,
+        )
+
+        rest_html = build_restaurant_registration_email_html(
+            restaurant_name="Taco Palace",
+            owner_name="Carlos",
+            email="carlos@taco.com",
+            password="TacoPassword123",
+            login_url="https://indulj.vercel.app/restaurant/login",
+        )
+        self.assertIn("Taco Palace", rest_html)
+        self.assertIn("carlos@taco.com", rest_html)
+        self.assertIn("TacoPassword123", rest_html)
+        self.assertIn("https://indulj.vercel.app/restaurant/login", rest_html)
+
+        sub_admin_html = build_sub_admin_registration_email_html(
+            full_name="Sarah Staff",
+            email="sarah@indulj.com",
+            password="SarahPassword456",
+            designation="Operations Lead",
+            unique_id="SL-1234",
+            admin_type="employee",
+            login_url="https://indulj.vercel.app/login",
+        )
+        self.assertIn("Sarah Staff", sub_admin_html)
+        self.assertIn("sarah@indulj.com", sub_admin_html)
+        self.assertIn("SarahPassword456", sub_admin_html)
+        self.assertIn("Operations Lead", sub_admin_html)
+        self.assertIn("SL-1234", sub_admin_html)
+        self.assertIn("https://indulj.vercel.app/login", sub_admin_html)
+

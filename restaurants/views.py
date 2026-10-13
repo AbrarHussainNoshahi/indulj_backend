@@ -135,6 +135,14 @@ class AdminCreateRestaurantView(APIView):
             registered_by=registered_by,
         )
 
+        from accounts.registration_emails import send_restaurant_registration_email
+        send_restaurant_registration_email(
+            restaurant_name=restaurant.name,
+            owner_name=data.get("owner_name") or restaurant.name,
+            email=data["email"],
+            password=data["password"],
+        )
+
         return Response(
             {
                 "success": True,
@@ -317,11 +325,15 @@ class AdminChangeRestaurantPlanView(APIView):
             )
 
         new_plan = (request.data.get("subscription_plan") or request.data.get("plan") or "").lower().strip()
-        if new_plan not in ["basic", "starter", "premium"]:
+        if new_plan in ["free", "basic", "starter"]:
+            new_plan = "free"
+        elif new_plan == "premium":
+            new_plan = "premium"
+        else:
             return Response(
                 {
                     "success": False,
-                    "message": "Invalid plan. Choose 'basic', 'starter', or 'premium'.",
+                    "message": "Invalid plan. Choose 'free' or 'premium'.",
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -332,7 +344,7 @@ class AdminChangeRestaurantPlanView(APIView):
         return Response(
             {
                 "success": True,
-                "message": f"Restaurant plan updated to {new_plan.capitalize()}",
+                "message": f"Restaurant plan updated to {new_plan.capitalize()} Plan",
                 "data": {
                     "id": restaurant.id,
                     "name": restaurant.name,

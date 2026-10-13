@@ -593,6 +593,24 @@ class RestaurantCreateDealView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Check Free tier 10 submissions limit
+        is_premium = (restaurant.subscription_plan or "").lower() == "premium"
+        if not is_premium:
+            from happy_hours.models import HappyHour
+            total_submissions = (
+                Deal.objects.filter(restaurant=restaurant).count()
+                + HappyHour.objects.filter(restaurant=restaurant, deal__isnull=True).count()
+            )
+            if total_submissions >= 10:
+                return Response(
+                    {
+                        "success": False,
+                        "message": "Free tier limit reached (10 deals & happy hours). Please upgrade to the Premium Plan ($99/mo) for unlimited submissions.",
+                        "limit_reached": True,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         if 'food_type' in req_data:
             req_data['food_type'] = normalize_food_type_input(req_data['food_type'])

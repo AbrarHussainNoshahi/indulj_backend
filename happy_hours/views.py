@@ -496,6 +496,24 @@ class RestaurantCreateHappyHourView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Check Free tier 10 submissions limit
+        is_premium = (restaurant.subscription_plan or "").lower() == "premium"
+        if not is_premium:
+            from deals.models import Deal
+            total_submissions = (
+                Deal.objects.filter(restaurant=restaurant).count()
+                + HappyHour.objects.filter(restaurant=restaurant, deal__isnull=True).count()
+            )
+            if total_submissions >= 10:
+                return Response(
+                    {
+                        "success": False,
+                        "message": "Free tier limit reached (10 deals & happy hours). Please upgrade to the Premium Plan ($99/mo) for unlimited submissions.",
+                        "limit_reached": True,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         serializer = CreateHappyHourSerializer(data=request.data)
 
         if not serializer.is_valid():

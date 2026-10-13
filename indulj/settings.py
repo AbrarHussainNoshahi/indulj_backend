@@ -128,14 +128,19 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 
-# Media / Cloudinary
-USE_CLOUDINARY = config("USE_CLOUDINARY", default=not DEBUG, cast=bool)
+# Media Files
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
+
+# Cloudinary (used optionally for images if USE_CLOUDINARY is set to True)
+USE_CLOUDINARY = config("USE_CLOUDINARY", default=False, cast=bool)
 
 if USE_CLOUDINARY:
     CLOUDINARY_STORAGE = {
-        "CLOUD_NAME": config("CLOUDINARY_CLOUD_NAME"),
-        "API_KEY": config("CLOUDINARY_API_KEY"),
-        "API_SECRET": config("CLOUDINARY_API_SECRET"),
+        "CLOUD_NAME": config("CLOUDINARY_CLOUD_NAME", default=""),
+        "API_KEY": config("CLOUDINARY_API_KEY", default=""),
+        "API_SECRET": config("CLOUDINARY_API_SECRET", default=""),
     }
 
     STORAGES = {
@@ -145,11 +150,11 @@ if USE_CLOUDINARY:
         "staticfiles": {
             "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         },
+        "documents": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
     }
 else:
-    MEDIA_URL = "/media/"
-    MEDIA_ROOT = BASE_DIR / "media"
-
     STORAGES = {
         "default": {
             "BACKEND": "django.core.files.storage.FileSystemStorage",
@@ -157,9 +162,10 @@ else:
         "staticfiles": {
             "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
         },
+        "documents": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+        },
     }
-
-MEDIA_URL = "/media/"
 
 # CORS
 CORS_ALLOWED_ORIGINS = [
@@ -267,3 +273,4 @@ EMAIL_TIMEOUT = 20
 SUPERADMIN_CONTACT_EMAIL = config("SUPERADMIN_CONTACT_EMAIL", default="admin@indulj.com")
 
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
+FRONTEND_URL = config("FRONTEND_URL", default="https://indulj.vercel.app")

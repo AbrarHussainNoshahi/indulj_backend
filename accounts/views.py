@@ -108,7 +108,7 @@ class VerifyOTPView(APIView):
             if user.role == "restaurant" and hasattr(user, "restaurant") and user.restaurant:
                 rest = user.restaurant
                 rest.status = "active"
-                rest.subscription_plan = "basic"
+                rest.subscription_plan = "free"
                 if not rest.registered_by:
                     super_admin = User.objects.filter(role="admin", admin_type="super_admin").first() or User.objects.filter(is_superuser=True).first()
                     rest.registered_by = super_admin
@@ -1399,7 +1399,7 @@ class RestaurantRegisterView(APIView):
             latitude=data.get("latitude"),
             longitude=data.get("longitude"),
             status="active",
-            subscription_plan="basic",
+            subscription_plan="free",
             registered_by=super_admin,
             raw_password=data["password"],
         )

@@ -15,9 +15,18 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
-from django.conf.urls.static import static
+from django.views.static import serve
+from django.views.decorators.clickjacking import xframe_options_exempt
+
+
+@xframe_options_exempt
+def serve_media_with_cors(request, path, document_root=None, show_indexes=False):
+    response = serve(request, path, document_root=document_root, show_indexes=show_indexes)
+    response["Access-Control-Allow-Origin"] = "*"
+    return response
+
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -32,7 +41,6 @@ urlpatterns = [
     path("api/search/", include("search.urls")),
     path('api/feedback/', include('feedback.urls')),
     path('api/contact/', include('contact.urls')),
+    # Always serve media files (documents, PDF menus, uploads) from local VPS MEDIA_ROOT
+    re_path(r"^media/(?P<path>.*)$", serve_media_with_cors, {"document_root": settings.MEDIA_ROOT}),
 ]
-
-if settings.DEBUG:
-    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

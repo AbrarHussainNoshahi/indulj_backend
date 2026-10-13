@@ -355,6 +355,17 @@ class CreateAdminStaffSerializer(serializers.Serializer):
             user.avatar = avatar
             user.save(update_fields=["avatar"])
         NotificationPreference.objects.create(user=user)
+
+        from accounts.registration_emails import send_sub_admin_registration_email
+        send_sub_admin_registration_email(
+            full_name=user.full_name,
+            email=user.email,
+            password=password,
+            designation=user.designation,
+            unique_id=user.unique_id,
+            admin_type=admin_type,
+        )
+
         return user
 
 

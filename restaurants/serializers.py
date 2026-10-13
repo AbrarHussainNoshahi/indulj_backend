@@ -91,7 +91,8 @@ class RestaurantListSerializer(serializers.ModelSerializer):
     total_deals = serializers.SerializerMethodField()
     total_happy_hours = serializers.SerializerMethodField()
     is_registered = serializers.SerializerMethodField()
-    plan = serializers.CharField(source="subscription_plan", read_only=True)
+    plan = serializers.SerializerMethodField()
+    is_premium = serializers.SerializerMethodField()
     registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
     registered_by_name = serializers.SerializerMethodField()
     registered_by_email = serializers.EmailField(source="registered_by.email", read_only=True, allow_null=True)
@@ -121,6 +122,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "is_registered",
             "subscription_plan",
             "plan",
+            "is_premium",
             "registered_by_id",
             "registered_by_name",
             "registered_by_email",
@@ -148,6 +150,12 @@ class RestaurantListSerializer(serializers.ModelSerializer):
 
     def get_total_happy_hours(self, obj):
         return obj.happy_hours.count()
+
+    def get_plan(self, obj):
+        return "premium" if (obj.subscription_plan or "").lower() == "premium" else "free"
+
+    def get_is_premium(self, obj):
+        return (obj.subscription_plan or "").lower() == "premium"
 
     def get_is_registered(self, obj):
         return bool(obj.owner_id is not None)
@@ -192,9 +200,12 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
 
     total_deals = serializers.SerializerMethodField()
     total_happy_hours = serializers.SerializerMethodField()
+    total_submissions = serializers.SerializerMethodField()
+    can_submit = serializers.SerializerMethodField()
+    is_premium = serializers.SerializerMethodField()
     is_registered = serializers.SerializerMethodField()
     password = serializers.SerializerMethodField()
-    plan = serializers.CharField(source="subscription_plan", read_only=True)
+    plan = serializers.SerializerMethodField()
     registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
     registered_by_name = serializers.SerializerMethodField()
     registered_by_email = serializers.EmailField(source="registered_by.email", read_only=True, allow_null=True)
@@ -232,6 +243,9 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
             "owner",
             "total_deals",
             "total_happy_hours",
+            "total_submissions",
+            "can_submit",
+            "is_premium",
             "is_registered",
             "password",
             "subscription_plan",
@@ -276,6 +290,22 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
 
     def get_total_happy_hours(self, obj):
         return obj.happy_hours.count()
+
+    def get_plan(self, obj):
+        return "premium" if (obj.subscription_plan or "").lower() == "premium" else "free"
+
+    def get_is_premium(self, obj):
+        return (obj.subscription_plan or "").lower() == "premium"
+
+    def get_total_submissions(self, obj):
+        deals_count = obj.deals.count()
+        hh_count = obj.happy_hours.filter(deal__isnull=True).count()
+        return deals_count + hh_count
+
+    def get_can_submit(self, obj):
+        if self.get_is_premium(obj):
+            return True
+        return self.get_total_submissions(obj) < 10
 
     def get_is_registered(self, obj):
         return bool(obj.owner_id is not None)
@@ -440,6 +470,14 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
                     instance.email = owner_email
                 if owner_phone:
                     instance.phone = owner_phone
+
+                from accounts.registration_emails import send_restaurant_registration_email
+                send_restaurant_registration_email(
+                    restaurant_name=validated_data.get("name") or instance.name,
+                    owner_name=owner_name or instance.name,
+                    email=owner_email,
+                    password=password,
+                )
         else:
             if owner_name is not None:
                 owner.full_name = owner_name
