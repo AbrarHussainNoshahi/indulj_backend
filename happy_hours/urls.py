@@ -19,6 +19,7 @@ from .views import (
     RestaurantHappyHourListView,
     RestaurantRejectHappyHourView,
     RestaurantUpdateDeleteHappyHourView,
+    HappyHourDealRSVPView,
 )
 
 urlpatterns = [
@@ -27,6 +28,8 @@ urlpatterns = [
     path("public/map/", MapHappyHoursView.as_view()),
     path("public/<int:pk>/", PublicHappyHourDetailView.as_view()),
     path("<int:pk>/cancel/", CancelMyHappyHourView.as_view()),
+    path("deals/<int:pk>/rsvp/", HappyHourDealRSVPView.as_view()),
+    path("<int:pk>/rsvp/", HappyHourDealRSVPView.as_view()),
 
     # User
     path("plan/", PlanHappyHourView.as_view()),

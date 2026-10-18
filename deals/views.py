@@ -128,6 +128,16 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
 
     hh_date = data.get("hh_date") or None
 
+    raw_public = data.get("hh_is_public")
+    if raw_public is None:
+        raw_public = data.get("is_public")
+    if raw_public is None:
+        is_public_val = True
+    elif isinstance(raw_public, bool):
+        is_public_val = raw_public
+    else:
+        is_public_val = str(raw_public).lower() in ["true", "1", "yes"]
+
     hh = HappyHour.objects.create(
         deal=deal,
         is_deal=True,
@@ -146,7 +156,7 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
         location=data.get("location_branch") or getattr(deal, "location_branch", "") or restaurant.address or restaurant.city or "",
         discount_offer=hh_discount,
         status=status_val,
-        is_public=True,
+        is_public=is_public_val,
         image=happy_hour_image,
     )
 
@@ -695,11 +705,29 @@ class RestaurantUpdateDeleteDealView(APIView):
             new_status = deal.status if deal.status in ["active", "draft", "cancelled"] else "active"
             serializer.save(status=new_status, rejection_reason="")
 
+            try:
+                from happy_hours.models import HappyHour
+                for hh in HappyHour.objects.filter(deal=deal):
+                    if "hh_group_size" in req_data:
+                        try:
+                            hh.group_size = int(req_data["hh_group_size"])
+                        except (ValueError, TypeError):
+                            pass
+                    if "is_public" in req_data or "hh_is_public" in req_data:
+                        raw_pub = req_data.get("hh_is_public", req_data.get("is_public"))
+                        hh.is_public = str(raw_pub).lower() in ["true", "1", "yes"] if not isinstance(raw_pub, bool) else raw_pub
+                    hh.title = deal.title
+                    hh.description = deal.description
+                    hh.save()
+            except Exception:
+                pass
+
             return Response({
                 "success": True,
                 "message": "Deal updated successfully.",
                 "data": DealListSerializer(deal, context={"request": request}).data,
             })
+
 
         return Response(
             {"success": False, "errors": serializer.errors},

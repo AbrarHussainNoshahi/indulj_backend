@@ -14,12 +14,13 @@ from rest_framework.views import APIView
 from accounts.permissions import IsAdmin, IsRestaurant, IsUser
 from restaurants.models import Restaurant
 
-from .models import HappyHour
+from .models import HappyHour, HappyHourRSVP
 from .serializers import (
     AdminUpdateHappyHourSerializer,
     CreateHappyHourSerializer,
     HappyHourDetailSerializer,
     HappyHourListSerializer,
+    HappyHourRSVPSerializer,
     PlanHappyHourSerializer,
     RejectHappyHourSerializer,
     RestaurantResponseSerializer,
@@ -1133,3 +1134,123 @@ class AdminAcceptAllHappyHoursView(APIView):
             "success": True,
             "message": f"{count} happy hours accepted",
         })
+
+
+class HappyHourDealRSVPView(APIView):
+    permission_classes = [AllowAny]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get(self, request, pk):
+        try:
+            hh = HappyHour.objects.select_related("restaurant", "deal", "submitted_by").get(pk=pk)
+        except HappyHour.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Happy hour deal not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not hh.is_deal:
+            return Response(
+                {"success": False, "message": "RSVP is only available for Happy Hour Deals."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Increment views count
+        hh.views_count += 1
+        hh.save(update_fields=["views_count"])
+
+        serializer = HappyHourDetailSerializer(hh, context={"request": request})
+        return Response({
+            "success": True,
+            "data": serializer.data,
+            "summary": hh.rsvp_summary,
+        })
+
+    def post(self, request, pk):
+        try:
+            hh = HappyHour.objects.select_related("restaurant", "deal").get(pk=pk)
+        except HappyHour.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Happy hour deal not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if not hh.is_deal:
+            return Response(
+                {"success": False, "message": "RSVP is only available for Happy Hour Deals."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not hh.is_public:
+            return Response(
+                {
+                    "success": False,
+                    "message": "This Happy Hour Deal is set to Private and does not accept public RSVPs.",
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        status_val = str(request.data.get("status") or "going").lower().strip()
+        valid_statuses = [c[0] for c in HappyHourRSVP.STATUS_CHOICES]
+        if status_val not in valid_statuses:
+            status_val = "going"
+
+        try:
+            attendee_count = max(1, int(request.data.get("attendee_count") or 1))
+        except (ValueError, TypeError):
+            attendee_count = 1
+
+        name = str(request.data.get("name") or "").strip()
+        if not name and request.user.is_authenticated:
+            name = getattr(request.user, "full_name", "") or getattr(request.user, "email", "")
+
+        # If user selects going, name is required
+        if status_val == "going":
+            if not name:
+                return Response(
+                    {"success": False, "message": "Name is required when confirming you are going."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            # Capacity check
+            current_going = hh.confirmed_attendees_count
+            max_group = hh.group_size or 0
+            if max_group > 0 and (current_going + attendee_count) > max_group:
+                remaining = max(0, max_group - current_going)
+                return Response(
+                    {
+                        "success": False,
+                        "message": f"This Happy Hour Deal is full! Only {remaining} spot(s) remaining.",
+                        "is_full": True,
+                        "spots_remaining": remaining,
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            # If not going, details not required
+            attendee_count = 1
+            if not name:
+                name = "Guest"
+
+        notes = str(request.data.get("notes") or "").strip()
+        avatar = request.FILES.get("avatar")
+
+        rsvp = HappyHourRSVP.objects.create(
+            happy_hour=hh,
+            user=request.user if request.user.is_authenticated else None,
+            name=name,
+            avatar=avatar,
+            status=status_val,
+            attendee_count=attendee_count if status_val == "going" else 1,
+            notes=notes,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "RSVP submitted successfully!",
+                "data": HappyHourRSVPSerializer(rsvp, context={"request": request}).data,
+                "summary": hh.rsvp_summary,
+            },
+            status=status.HTTP_201_CREATED,
+        )

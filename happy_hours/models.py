@@ -167,3 +167,73 @@ class HappyHour(models.Model):
                 return current_time >= self.start_time or current_time <= self.end_time
 
         return self.status == "active"
+
+    @property
+    def confirmed_attendees_count(self):
+        from django.db.models import Sum
+        res = self.rsvps.filter(status="going").aggregate(total=Sum("attendee_count"))["total"]
+        return res or 0
+
+    @property
+    def is_full(self):
+        if not self.is_deal:
+            return False
+        if not self.group_size or self.group_size <= 0:
+            return False
+        return self.confirmed_attendees_count >= self.group_size
+
+    @property
+    def spots_remaining(self):
+        if not self.is_deal or not self.group_size:
+            return None
+        return max(0, self.group_size - self.confirmed_attendees_count)
+
+    @property
+    def rsvp_summary(self):
+        from django.db.models import Sum
+        going_count = self.rsvps.filter(status="going").aggregate(total=Sum("attendee_count"))["total"] or 0
+        maybe_count = self.rsvps.filter(status="maybe").count()
+        cant_go_count = self.rsvps.filter(status="cant_go").count()
+        return {
+            "going": going_count,
+            "maybe": maybe_count,
+            "cant_go": cant_go_count,
+            "total_responses": self.rsvps.count(),
+            "spots_remaining": self.spots_remaining,
+            "is_full": self.is_full,
+            "group_size": self.group_size,
+        }
+
+
+class HappyHourRSVP(models.Model):
+    STATUS_CHOICES = [
+        ("going", "Going"),
+        ("maybe", "Maybe"),
+        ("cant_go", "Can't Go"),
+    ]
+
+    happy_hour = models.ForeignKey(
+        HappyHour,
+        on_delete=models.CASCADE,
+        related_name="rsvps",
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="happy_hour_rsvps",
+    )
+    name = models.CharField(max_length=150, blank=True)
+    avatar = models.ImageField(upload_to="happy_hour_rsvps/", null=True, blank=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default="going")
+    attendee_count = models.PositiveIntegerField(default=1)
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"{self.name or 'Guest'} ({self.status}) for {self.happy_hour.title}"

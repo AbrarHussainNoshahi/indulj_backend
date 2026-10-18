@@ -1,5 +1,46 @@
 from rest_framework import serializers
-from .models import HappyHour
+from .models import HappyHour, HappyHourRSVP
+
+
+class HappyHourRSVPSerializer(serializers.ModelSerializer):
+    avatar_url = serializers.SerializerMethodField()
+    user_name = serializers.CharField(source="user.full_name", read_only=True)
+
+    class Meta:
+        model = HappyHourRSVP
+        fields = [
+            "id",
+            "happy_hour",
+            "user",
+            "user_name",
+            "name",
+            "avatar",
+            "avatar_url",
+            "status",
+            "attendee_count",
+            "notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["id", "happy_hour", "user", "created_at", "updated_at"]
+
+    def get_avatar_url(self, obj):
+        request = self.context.get("request")
+        if obj.avatar and hasattr(obj.avatar, "url"):
+            try:
+                if request:
+                    return request.build_absolute_uri(obj.avatar.url)
+                return obj.avatar.url
+            except Exception:
+                pass
+        if obj.user and getattr(obj.user, "avatar", None):
+            try:
+                if request:
+                    return request.build_absolute_uri(obj.user.avatar.url)
+                return obj.user.avatar.url
+            except Exception:
+                pass
+        return None
 
 
 class HappyHourListSerializer(serializers.ModelSerializer):
@@ -36,6 +77,11 @@ class HappyHourListSerializer(serializers.ModelSerializer):
     is_active_now = serializers.SerializerMethodField()
     is_deal = serializers.BooleanField(read_only=True)
     deal_id = serializers.IntegerField(source="deal.id", read_only=True, allow_null=True)
+
+    confirmed_attendees_count = serializers.IntegerField(read_only=True)
+    is_full = serializers.BooleanField(read_only=True)
+    spots_remaining = serializers.IntegerField(read_only=True, allow_null=True)
+    rsvp_summary = serializers.JSONField(read_only=True)
 
     def get_is_active_now(self, obj):
         try:
@@ -88,6 +134,10 @@ class HappyHourListSerializer(serializers.ModelSerializer):
             "latitude",
             "longitude",
             "image_url",
+            "confirmed_attendees_count",
+            "is_full",
+            "spots_remaining",
+            "rsvp_summary",
             "created_at",
         ]
 
@@ -104,8 +154,17 @@ class HappyHourListSerializer(serializers.ModelSerializer):
 
 
 class HappyHourDetailSerializer(HappyHourListSerializer):
+    rsvps = serializers.SerializerMethodField()
+
     class Meta(HappyHourListSerializer.Meta):
-        pass
+        fields = HappyHourListSerializer.Meta.fields + ["rsvps"]
+
+    def get_rsvps(self, obj):
+        if not getattr(obj, "is_deal", False):
+            return []
+        qs = obj.rsvps.all()
+        return HappyHourRSVPSerializer(qs, many=True, context=self.context).data
+
 
 
 class PlanHappyHourSerializer(serializers.Serializer):
