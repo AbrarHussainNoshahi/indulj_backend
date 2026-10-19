@@ -176,7 +176,7 @@ class HappyHour(models.Model):
 
     @property
     def is_full(self):
-        if not self.is_deal:
+        if self.is_deal:
             return False
         if not self.group_size or self.group_size <= 0:
             return False
@@ -184,12 +184,22 @@ class HappyHour(models.Model):
 
     @property
     def spots_remaining(self):
-        if not self.is_deal or not self.group_size:
+        if self.is_deal or not self.group_size:
             return None
         return max(0, self.group_size - self.confirmed_attendees_count)
 
     @property
     def rsvp_summary(self):
+        if self.is_deal:
+            return {
+                "going": 0,
+                "maybe": 0,
+                "cant_go": 0,
+                "total_responses": 0,
+                "spots_remaining": None,
+                "is_full": False,
+                "group_size": self.group_size,
+            }
         from django.db.models import Sum
         going_count = self.rsvps.filter(status="going").aggregate(total=Sum("attendee_count"))["total"] or 0
         maybe_count = self.rsvps.filter(status="maybe").count()

@@ -160,7 +160,7 @@ class HappyHourDetailSerializer(HappyHourListSerializer):
         fields = HappyHourListSerializer.Meta.fields + ["rsvps"]
 
     def get_rsvps(self, obj):
-        if not getattr(obj, "is_deal", False):
+        if getattr(obj, "is_deal", False):
             return []
         qs = obj.rsvps.all()
         return HappyHourRSVPSerializer(qs, many=True, context=self.context).data

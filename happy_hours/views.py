@@ -186,25 +186,29 @@ class PlanHappyHourView(APIView):
         data = serializer.validated_data
 
         # Resolve restaurant
-        rest_input = data.get("restaurant") or data.get("restaurant_name") or data.get("location")
+        rest_input = data.get("restaurant") or data.get("restaurant_name")
+        location_input = data.get("location") or ""
         restaurant = None
 
         if rest_input:
             if str(rest_input).isdigit():
                 restaurant = Restaurant.objects.filter(pk=int(rest_input), status="active").first()
             if not restaurant:
+                restaurant = Restaurant.objects.filter(name__iexact=str(rest_input), status="active").first()
+            if not restaurant:
                 restaurant = Restaurant.objects.filter(name__icontains=str(rest_input), status="active").first()
 
-        if not restaurant:
-            restaurant = Restaurant.objects.filter(status="active").first()
-
-        if not restaurant:
+        if not restaurant and (rest_input or location_input):
             restaurant = Restaurant.objects.create(
                 name=str(rest_input) if rest_input else "Partner Restaurant",
-                city=data.get("location") or "New York",
+                city=location_input or "New York",
+                address=location_input or "",
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
+
+        if not restaurant:
+            restaurant = Restaurant.objects.filter(status="active").first()
 
         # Check / set operating hours
         operating_hours = restaurant.operating_hours
@@ -1145,13 +1149,13 @@ class HappyHourDealRSVPView(APIView):
             hh = HappyHour.objects.select_related("restaurant", "deal", "submitted_by").get(pk=pk)
         except HappyHour.DoesNotExist:
             return Response(
-                {"success": False, "message": "Happy hour deal not found."},
+                {"success": False, "message": "Happy hour not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not hh.is_deal:
+        if hh.is_deal:
             return Response(
-                {"success": False, "message": "RSVP is only available for Happy Hour Deals."},
+                {"success": False, "message": "RSVP is only available for Planned Happy Hours."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1171,13 +1175,13 @@ class HappyHourDealRSVPView(APIView):
             hh = HappyHour.objects.select_related("restaurant", "deal").get(pk=pk)
         except HappyHour.DoesNotExist:
             return Response(
-                {"success": False, "message": "Happy hour deal not found."},
+                {"success": False, "message": "Happy hour not found."},
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        if not hh.is_deal:
+        if hh.is_deal:
             return Response(
-                {"success": False, "message": "RSVP is only available for Happy Hour Deals."},
+                {"success": False, "message": "RSVP is only available for Planned Happy Hours."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1185,7 +1189,7 @@ class HappyHourDealRSVPView(APIView):
             return Response(
                 {
                     "success": False,
-                    "message": "This Happy Hour Deal is set to Private and does not accept public RSVPs.",
+                    "message": "This Happy Hour is set to Private and does not accept public RSVPs.",
                 },
                 status=status.HTTP_403_FORBIDDEN,
             )
@@ -1220,7 +1224,7 @@ class HappyHourDealRSVPView(APIView):
                 return Response(
                     {
                         "success": False,
-                        "message": f"This Happy Hour Deal is full! Only {remaining} spot(s) remaining.",
+                        "message": f"This Happy Hour is full! Only {remaining} spot(s) remaining.",
                         "is_full": True,
                         "spots_remaining": remaining,
                     },
