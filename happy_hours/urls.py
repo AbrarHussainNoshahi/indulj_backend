@@ -6,6 +6,7 @@ from .views import (
     AdminHappyHourDetailView,
     AdminHappyHourListView,
     AdminRejectHappyHourView,
+    AdminDismissHappyHourDuplicateView,
     DeleteMyHappyHourView,
     MapHappyHoursView,
     MyHappyHoursView,
@@ -52,4 +53,5 @@ urlpatterns = [
     path("admin/<int:pk>/delete/", AdminHappyHourDetailView.as_view()),
     path("admin/<int:pk>/accept/", AdminAcceptHappyHourView.as_view()),
     path("admin/<int:pk>/reject/", AdminRejectHappyHourView.as_view()),
+    path("admin/<int:pk>/dismiss-duplicate/", AdminDismissHappyHourDuplicateView.as_view()),
 ]

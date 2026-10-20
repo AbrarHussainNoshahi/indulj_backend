@@ -38,6 +38,7 @@ from .serializers import (
     SavedDealSerializer,
     AdminCreateDealSerializer,
 )
+from .image_enhancer import enhance_uploaded_image
 
 from django.utils import timezone
 from datetime import timedelta
@@ -367,7 +368,7 @@ class SubmitDealView(APIView):
             start_time=data.get("start_time"),
             end_time=data.get("end_time"),
             location_branch=data.get("location_branch", ""),
-            image=data.get("image"),
+            image=enhance_uploaded_image(data.get("image")),
             status="pending",
         )
 
@@ -624,6 +625,8 @@ class RestaurantCreateDealView(APIView):
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         if 'food_type' in req_data:
             req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
+        if 'image' in req_data and req_data['image']:
+            req_data['image'] = enhance_uploaded_image(req_data['image'])
         serializer = CreateDealSerializer(data=req_data)
 
         if not serializer.is_valid():
@@ -638,6 +641,25 @@ class RestaurantCreateDealView(APIView):
             created_by_role="restaurant",
             status="active",
         )
+
+        # Duplicate deal detection
+        try:
+            from .duplicate_detector import detect_deal_duplicates
+            is_dup, match_deal, score, reasons = detect_deal_duplicates(deal)
+            if is_dup and match_deal:
+                deal.is_potential_duplicate = True
+                deal.duplicate_of = match_deal
+                deal.duplicate_score = score
+                deal.duplicate_reasons = reasons
+                deal.save(update_fields=[
+                    "is_potential_duplicate",
+                    "duplicate_of",
+                    "duplicate_score",
+                    "duplicate_reasons",
+                ])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Restaurant deal duplicate check failed: {e}")
 
         raw_post_hh = request.data.get("post_to_happy_hour")
         if raw_post_hh in [True, "true", "True", "1", 1]:
@@ -699,6 +721,8 @@ class RestaurantUpdateDeleteDealView(APIView):
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
         if 'food_type' in req_data:
             req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
+        if 'image' in req_data and req_data['image']:
+            req_data['image'] = enhance_uploaded_image(req_data['image'])
         serializer = CreateDealSerializer(deal, data=req_data, partial=True)
 
         if serializer.is_valid():
@@ -925,11 +949,30 @@ class AdminCreateDealView(APIView):
             end_time=data.get("end_time"),
             location_branch=data.get("location_branch", ""),
             discount_percentage=data.get("discount_percentage", ""),
-            image=data.get("image"),
+            image=enhance_uploaded_image(data.get("image")),
             is_hot_deal=data.get("is_hot_deal", False),
             expires_at=data.get("expires_at"),
             status=data.get("status", "active"),
         )
+
+        # Duplicate deal detection
+        try:
+            from .duplicate_detector import detect_deal_duplicates
+            is_dup, match_deal, score, reasons = detect_deal_duplicates(deal)
+            if is_dup and match_deal:
+                deal.is_potential_duplicate = True
+                deal.duplicate_of = match_deal
+                deal.duplicate_score = score
+                deal.duplicate_reasons = reasons
+                deal.save(update_fields=[
+                    "is_potential_duplicate",
+                    "duplicate_of",
+                    "duplicate_score",
+                    "duplicate_reasons",
+                ])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Admin deal duplicate check failed: {e}")
 
         post_to_happy_hour = data.get("post_to_happy_hour", False) or (request.data.get("post_to_happy_hour") in [True, "true", "True", "1", 1])
         if post_to_happy_hour:
@@ -1214,3 +1257,24 @@ class AdminDeleteDealView(APIView):
 
         deal.delete()
         return Response({"success": True, "message": "Deal deleted"})
+
+
+class AdminDismissDealDuplicateView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.get(pk=pk)
+        except Deal.DoesNotExist:
+            return Response({"success": False, "message": "Deal not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        deal.is_potential_duplicate = False
+        deal.duplicate_reasons = []
+        deal.duplicate_score = 0.0
+        deal.save(update_fields=["is_potential_duplicate", "duplicate_reasons", "duplicate_score"])
+
+        return Response({
+            "success": True,
+            "message": f"Duplicate flag dismissed for '{deal.title}'.",
+            "data": DealListSerializer(deal, context={"request": request}).data,
+        })

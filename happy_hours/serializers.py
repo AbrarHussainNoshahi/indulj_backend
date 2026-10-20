@@ -83,6 +83,9 @@ class HappyHourListSerializer(serializers.ModelSerializer):
     spots_remaining = serializers.IntegerField(read_only=True, allow_null=True)
     rsvp_summary = serializers.JSONField(read_only=True)
 
+    duplicate_of_id = serializers.IntegerField(source="duplicate_of.id", read_only=True, allow_null=True)
+    duplicate_of_title = serializers.CharField(source="duplicate_of.title", read_only=True, allow_null=True)
+
     def get_is_active_now(self, obj):
         try:
             return obj.is_live_now()
@@ -138,6 +141,11 @@ class HappyHourListSerializer(serializers.ModelSerializer):
             "is_full",
             "spots_remaining",
             "rsvp_summary",
+            "is_potential_duplicate",
+            "duplicate_of_id",
+            "duplicate_of_title",
+            "duplicate_score",
+            "duplicate_reasons",
             "created_at",
         ]
 

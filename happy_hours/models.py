@@ -121,6 +121,18 @@ class HappyHour(models.Model):
     accepted_at = models.DateTimeField(null=True, blank=True)
     rejected_at = models.DateTimeField(null=True, blank=True)
 
+    # AI Duplicate Detection Fields
+    is_potential_duplicate = models.BooleanField(default=False)
+    duplicate_of = models.ForeignKey(
+        "self",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="duplicates",
+    )
+    duplicate_score = models.FloatField(default=0.0, null=True, blank=True)
+    duplicate_reasons = models.JSONField(default=list, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

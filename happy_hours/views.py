@@ -25,6 +25,8 @@ from .serializers import (
     RejectHappyHourSerializer,
     RestaurantResponseSerializer,
 )
+from deals.image_enhancer import enhance_uploaded_image
+from deals.duplicate_detector import detect_happy_hour_duplicates
 
 
 class PublicHappyHourListView(APIView):
@@ -221,6 +223,9 @@ class PlanHappyHourView(APIView):
         start_time_val = data.get("start_time") or "17:00:00"
         end_time_val = data.get("end_time") or "20:00:00"
 
+        raw_image = data.get("image")
+        enhanced_image = enhance_uploaded_image(raw_image) if raw_image else None
+
         happy_hour = HappyHour.objects.create(
             restaurant=restaurant,
             submitted_by=request.user,
@@ -236,10 +241,28 @@ class PlanHappyHourView(APIView):
             location=data.get("location", ""),
             phone_number=data.get("phone_number", ""),
             is_public=data.get("is_public", True),
-            image=data.get("image"),
+            image=enhanced_image,
             specials=data.get("specials", []),
             status="pending",
         )
+
+        # AI Duplicate detection
+        try:
+            is_dup, match_hh, score, reasons = detect_happy_hour_duplicates(happy_hour)
+            if is_dup and match_hh:
+                happy_hour.is_potential_duplicate = True
+                happy_hour.duplicate_of = match_hh
+                happy_hour.duplicate_score = score
+                happy_hour.duplicate_reasons = reasons
+                happy_hour.save(update_fields=[
+                    "is_potential_duplicate",
+                    "duplicate_of",
+                    "duplicate_score",
+                    "duplicate_reasons",
+                ])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Happy hour duplicate detection error: {e}")
 
         # Also create deal if requested
         raw_also = request.data.get("also_add_to_deals")
@@ -519,7 +542,11 @@ class RestaurantCreateHappyHourView(APIView):
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        serializer = CreateHappyHourSerializer(data=request.data)
+        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if "image" in req_data and req_data["image"]:
+            req_data["image"] = enhance_uploaded_image(req_data["image"])
+
+        serializer = CreateHappyHourSerializer(data=req_data)
 
         if not serializer.is_valid():
             return Response(
@@ -536,6 +563,24 @@ class RestaurantCreateHappyHourView(APIView):
         if not happy_hour.status:
             happy_hour.status = "active"
             happy_hour.save(update_fields=["status"])
+
+        # AI Duplicate detection
+        try:
+            is_dup, match_hh, score, reasons = detect_happy_hour_duplicates(happy_hour)
+            if is_dup and match_hh:
+                happy_hour.is_potential_duplicate = True
+                happy_hour.duplicate_of = match_hh
+                happy_hour.duplicate_score = score
+                happy_hour.duplicate_reasons = reasons
+                happy_hour.save(update_fields=[
+                    "is_potential_duplicate",
+                    "duplicate_of",
+                    "duplicate_score",
+                    "duplicate_reasons",
+                ])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Restaurant happy hour duplicate detection error: {e}")
 
         if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
             send_happy_hour_notification_emails(happy_hour)
@@ -816,7 +861,9 @@ class AdminHappyHourListView(APIView):
                 qs = qs.filter(restaurant__registered_by_id=registered_by_param)
 
         status_filter = request.query_params.get("status")
-        if status_filter and status_filter != "all":
+        if status_filter == "duplicates" or request.query_params.get("duplicates") in ["true", "1"]:
+            qs = qs.filter(is_potential_duplicate=True)
+        elif status_filter and status_filter != "all":
             qs = qs.filter(status=status_filter)
 
         search = request.query_params.get("search")
@@ -1257,4 +1304,28 @@ class HappyHourDealRSVPView(APIView):
                 "summary": hh.rsvp_summary,
             },
             status=status.HTTP_201_CREATED,
-        )
+        )
+
+
+class AdminDismissHappyHourDuplicateView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            hh = HappyHour.objects.get(pk=pk)
+        except HappyHour.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Happy Hour not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        hh.is_potential_duplicate = False
+        hh.duplicate_reasons = []
+        hh.duplicate_score = 0.0
+        hh.save(update_fields=["is_potential_duplicate", "duplicate_reasons", "duplicate_score"])
+
+        return Response({
+            "success": True,
+            "message": f"Duplicate flag dismissed for '{hh.title}'.",
+            "data": HappyHourListSerializer(hh, context={"request": request}).data,
+        })

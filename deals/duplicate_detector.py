@@ -1,6 +1,13 @@
+import os
 import re
+import json
+import logging
 import difflib
+import requests
 from decimal import Decimal
+from django.conf import settings
+
+logger = logging.getLogger(__name__)
 
 # Common filler words to ignore when comparing titles & descriptions
 STOP_WORDS = {
@@ -98,19 +105,16 @@ def compute_day_match(day1: str, day2: str) -> tuple[float, bool]:
 
     overlap = days_set1.intersection(days_set2)
     if overlap:
-        # e.g., Tuesday inside everyday or weekdays
         ratio = len(overlap) / max(len(days_set1), len(days_set2))
         return max(0.75, ratio), True
 
-    # Completely different days (e.g. monday vs friday)
     return 0.0, False
 
 
-def compute_price_similarity(price1, price2, disc1: str, disc2: str) -> float:
+def compute_price_similarity(price1, price2, disc1: str = "", disc2: str = "") -> float:
     """Compares price and discount percentages."""
     p_score = 0.5
 
-    # Check explicit discount percentage string match (e.g. '20%')
     d1_clean = re.sub(r"[^\d]", "", str(disc1 or ""))
     d2_clean = re.sub(r"[^\d]", "", str(disc2 or ""))
     if d1_clean and d2_clean:
@@ -123,7 +127,6 @@ def compute_price_similarity(price1, price2, disc1: str, disc2: str) -> float:
         except ValueError:
             pass
 
-    # Compare numeric price
     try:
         val1 = float(price1 or 0)
         val2 = float(price2 or 0)
@@ -139,10 +142,76 @@ def compute_price_similarity(price1, price2, disc1: str, disc2: str) -> float:
     return p_score
 
 
+# ─────────────────────────────────────────────────────────────
+# GEMINI AI DUPLICATE CHECKER (AI TIER)
+# ─────────────────────────────────────────────────────────────
+def check_with_gemini_ai(item_type: str, new_item_data: dict, candidate_list: list[dict]):
+    """
+    Calls Google Gemini 1.5 Flash via REST API to semantically evaluate
+    whether a promotion is a duplicate of existing promotions.
+    Returns parsed JSON dict or None on failure.
+    """
+    api_key = getattr(settings, "GEMINI_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
+    api_key = str(api_key).strip()
+    if not api_key:
+        return None
+
+    prompt = (
+        f"You are an AI restaurant promotion auditor. Analyze if the NEW {item_type} is a duplicate "
+        f"or conflicting re-submission of any of the EXISTING active/pending {item_type}s for the SAME restaurant.\n\n"
+        f"NEW {item_type.upper()}:\n{json.dumps(new_item_data, indent=2)}\n\n"
+        f"EXISTING {item_type.upper()}S FOR THIS RESTAURANT:\n{json.dumps(candidate_list, indent=2)}\n\n"
+        "Return ONLY a JSON object (no markdown, no backticks, no code fence):\n"
+        "{\n"
+        '  "is_duplicate": true or false,\n'
+        '  "matched_id": <integer id of closest matching promotion, or null>,\n'
+        '  "similarity_score": <number between 0 and 100>,\n'
+        '  "reasons": ["short bullet explanation 1", "short bullet explanation 2"]\n'
+        "}"
+    )
+
+    payload = {
+        "contents": [
+            {
+                "parts": [{"text": prompt}]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.1,
+            "response_mime_type": "application/json",
+        },
+    }
+
+    models_to_try = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]
+
+    for model in models_to_try:
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            resp = requests.post(url, json=payload, timeout=6)
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_text = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+                if raw_text.startswith("```"):
+                    raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
+                    raw_text = re.sub(r"\s*```$", "", raw_text)
+                parsed = json.loads(raw_text)
+                logger.info(f"Gemini AI duplicate check succeeded using model {model}")
+                return parsed
+            else:
+                logger.debug(f"Gemini AI model {model} returned status {resp.status_code}: {resp.text[:120]}")
+        except Exception as e:
+            logger.info(f"Gemini AI model {model} error: {e}")
+
+    return None
+
+
+# ─────────────────────────────────────────────────────────────
+# DEAL DUPLICATE DETECTOR
+# ─────────────────────────────────────────────────────────────
 def detect_deal_duplicates(deal, candidate_qs=None):
     """
     Analyzes an incoming or existing deal against candidates for the same restaurant.
-    
+    Uses Gemini AI if configured, with an algorithmic local fallback.
     Returns:
         (is_duplicate: bool, best_match_deal, score: float, reasons: list[str])
     """
@@ -164,6 +233,52 @@ def detect_deal_duplicates(deal, candidate_qs=None):
     if not candidates:
         return False, None, 0.0, []
 
+    new_deal_data = {
+        "id": deal.id,
+        "title": deal.title,
+        "description": deal.description,
+        "price": str(deal.price),
+        "discount_percentage": deal.discount_percentage,
+        "day_of_week": deal.day_of_week,
+        "has_time_slots": deal.has_time_slots,
+        "start_time": str(deal.start_time) if deal.start_time else None,
+        "end_time": str(deal.end_time) if deal.end_time else None,
+        "food_type": deal.food_type,
+    }
+
+    candidate_list = [
+        {
+            "id": c.id,
+            "title": c.title,
+            "description": c.description,
+            "price": str(c.price),
+            "discount_percentage": c.discount_percentage,
+            "day_of_week": c.day_of_week,
+            "has_time_slots": c.has_time_slots,
+            "start_time": str(c.start_time) if c.start_time else None,
+            "end_time": str(c.end_time) if c.end_time else None,
+            "food_type": c.food_type,
+            "status": c.status,
+        }
+        for c in candidates
+    ]
+
+    # 1. Try Gemini AI
+    gemini_result = check_with_gemini_ai("deal", new_deal_data, candidate_list)
+    if gemini_result and isinstance(gemini_result, dict):
+        matched_id = gemini_result.get("matched_id")
+        matched_deal = next((c for c in candidates if c.id == matched_id), None)
+        score = float(gemini_result.get("similarity_score", 0.0))
+        is_dup = bool(gemini_result.get("is_duplicate", False)) or score >= 65.0
+        reasons = gemini_result.get("reasons", [])
+        if not reasons:
+            reasons = [f"AI match confidence: {score}%"]
+        if matched_deal and not any(str(matched_deal.id) in r for r in reasons):
+            reasons.append(f"Matches Deal #{matched_deal.id}: '{matched_deal.title}' ({matched_deal.status.capitalize()})")
+
+        return is_dup, matched_deal, round(score, 1), reasons
+
+    # 2. Local Fallback Heuristic
     best_match = None
     highest_score = 0.0
     best_reasons = []
@@ -174,28 +289,23 @@ def detect_deal_duplicates(deal, candidate_qs=None):
         cand_title_desc = f"{cand.title} {cand.description or ''}"
         reasons = []
 
-        # 1. Text Similarity (Title & Description)
         text_score = compute_text_similarity(deal_title_desc, cand_title_desc)
         title_only_score = compute_text_similarity(deal.title, cand.title)
         effective_text_score = max(text_score, title_only_score)
 
-        # 2. Day of Week Overlap
         day_score, is_day_compatible = compute_day_match(deal.day_of_week, cand.day_of_week)
 
-        # 3. Price / Discount Similarity
         price_score = compute_price_similarity(
             deal.price, cand.price,
             deal.discount_percentage, cand.discount_percentage
         )
 
-        # 4. Food type match
         food_score = 0.5
         f1 = normalize_text(deal.food_type or "")
         f2 = normalize_text(cand.food_type or "")
         if f1 and f2 and (f1 in f2 or f2 in f1):
             food_score = 0.9
 
-        # Time slot compatibility
         time_score = 0.5
         if deal.has_time_slots and cand.has_time_slots:
             if deal.start_time == cand.start_time and deal.end_time == cand.end_time:
@@ -205,13 +315,12 @@ def detect_deal_duplicates(deal, candidate_qs=None):
         elif not deal.has_time_slots and not cand.has_time_slots:
             time_score = 0.8
 
-        # If days are totally mutually exclusive (e.g. Mon vs Sat), penalize heavily
         if not is_day_compatible:
             composite_score = (
                 (effective_text_score * 0.40) +
                 (price_score * 0.20) +
                 (food_score * 0.10)
-            ) * 0.45  # Heavy penalty
+            ) * 0.45
         else:
             composite_score = (
                 (effective_text_score * 0.45) +
@@ -220,7 +329,6 @@ def detect_deal_duplicates(deal, candidate_qs=None):
                 (time_score * 0.10)
             )
 
-        # Build human-readable reasons for admin
         reasons.append(f"Same Restaurant: {deal.restaurant.name}")
 
         if effective_text_score >= 0.70:
@@ -250,10 +358,155 @@ def detect_deal_duplicates(deal, candidate_qs=None):
             best_reasons = reasons
 
     score_percentage = round(highest_score * 100, 1)
-
-    # Flag threshold: 65% composite or >= 80% title similarity with day compatibility
     is_duplicate = (highest_score >= 0.65) or (
         highest_score >= 0.55 and any("Identical active day" in r for r in best_reasons)
+    )
+
+    return is_duplicate, best_match, score_percentage, best_reasons
+
+
+# ─────────────────────────────────────────────────────────────
+# HAPPY HOUR DUPLICATE DETECTOR
+# ─────────────────────────────────────────────────────────────
+def detect_happy_hour_duplicates(happy_hour, candidate_qs=None):
+    """
+    Analyzes an incoming or existing happy hour against candidates for the same restaurant.
+    Uses Gemini AI if configured, with an algorithmic local fallback.
+    Returns:
+        (is_duplicate: bool, best_match_hh, score: float, reasons: list[str])
+    """
+    from happy_hours.models import HappyHour
+
+    if not happy_hour.restaurant:
+        return False, None, 0.0, []
+
+    if candidate_qs is None:
+        candidate_qs = HappyHour.objects.filter(
+            restaurant=happy_hour.restaurant,
+            status__in=["active", "upcoming", "pending"],
+        )
+
+    if happy_hour.id:
+        candidate_qs = candidate_qs.exclude(pk=happy_hour.id)
+
+    candidates = list(candidate_qs.select_related("restaurant", "submitted_by"))
+    if not candidates:
+        return False, None, 0.0, []
+
+    new_hh_data = {
+        "id": happy_hour.id,
+        "title": happy_hour.title,
+        "description": happy_hour.description,
+        "date": str(happy_hour.date) if happy_hour.date else None,
+        "start_time": str(happy_hour.start_time) if happy_hour.start_time else None,
+        "end_time": str(happy_hour.end_time) if happy_hour.end_time else None,
+        "discount_offer": happy_hour.discount_offer,
+        "event_type": happy_hour.event_type,
+        "vibe": happy_hour.vibe,
+    }
+
+    candidate_list = [
+        {
+            "id": c.id,
+            "title": c.title,
+            "description": c.description,
+            "date": str(c.date) if c.date else None,
+            "start_time": str(c.start_time) if c.start_time else None,
+            "end_time": str(c.end_time) if c.end_time else None,
+            "discount_offer": c.discount_offer,
+            "event_type": c.event_type,
+            "vibe": c.vibe,
+            "status": c.status,
+        }
+        for c in candidates
+    ]
+
+    # 1. Try Gemini AI
+    gemini_result = check_with_gemini_ai("happy hour", new_hh_data, candidate_list)
+    if gemini_result and isinstance(gemini_result, dict):
+        matched_id = gemini_result.get("matched_id")
+        matched_hh = next((c for c in candidates if c.id == matched_id), None)
+        score = float(gemini_result.get("similarity_score", 0.0))
+        is_dup = bool(gemini_result.get("is_duplicate", False)) or score >= 65.0
+        reasons = gemini_result.get("reasons", [])
+        if not reasons:
+            reasons = [f"AI match confidence: {score}%"]
+        if matched_hh and not any(str(matched_hh.id) in r for r in reasons):
+            reasons.append(f"Matches Happy Hour #{matched_hh.id}: '{matched_hh.title}' ({matched_hh.status.capitalize()})")
+
+        return is_dup, matched_hh, round(score, 1), reasons
+
+    # 2. Local Fallback Heuristic
+    best_match = None
+    highest_score = 0.0
+    best_reasons = []
+
+    hh_title_desc = f"{happy_hour.title} {happy_hour.description or ''}"
+
+    for cand in candidates:
+        cand_title_desc = f"{cand.title} {cand.description or ''}"
+        reasons = []
+
+        text_score = compute_text_similarity(hh_title_desc, cand_title_desc)
+        title_only_score = compute_text_similarity(happy_hour.title, cand.title)
+        effective_text_score = max(text_score, title_only_score)
+
+        # Date match
+        date_score = 0.5
+        same_date = False
+        if happy_hour.date and cand.date:
+            if happy_hour.date == cand.date:
+                date_score = 1.0
+                same_date = True
+            else:
+                date_score = 0.2
+        elif not happy_hour.date and not cand.date:
+            date_score = 0.8
+
+        # Time match
+        time_score = 0.5
+        if happy_hour.start_time and cand.start_time:
+            if happy_hour.start_time == cand.start_time and happy_hour.end_time == cand.end_time:
+                time_score = 1.0
+            else:
+                time_score = 0.6
+
+        # Discount match
+        disc_score = compute_price_similarity(0, 0, happy_hour.discount_offer, cand.discount_offer)
+
+        composite_score = (
+            (effective_text_score * 0.45) +
+            (date_score * 0.25) +
+            (time_score * 0.15) +
+            (disc_score * 0.15)
+        )
+
+        reasons.append(f"Same Restaurant: {happy_hour.restaurant.name}")
+
+        if effective_text_score >= 0.70:
+            reasons.append(f"High text similarity ({int(effective_text_score * 100)}% wording overlap)")
+        elif effective_text_score >= 0.50:
+            reasons.append(f"Moderate text similarity ({int(effective_text_score * 100)}% wording overlap)")
+
+        if same_date:
+            reasons.append(f"Identical Date: {happy_hour.date}")
+
+        if time_score >= 0.90 and happy_hour.start_time:
+            reasons.append(f"Same Time Slot ({happy_hour.start_time} - {happy_hour.end_time})")
+
+        if happy_hour.discount_offer and cand.discount_offer and disc_score >= 0.8:
+            reasons.append(f"Matching Discount Offer: {happy_hour.discount_offer}")
+
+        reasons.append(f"Matches Happy Hour #{cand.id}: '{cand.title}' ({cand.status.capitalize()})")
+
+        if composite_score > highest_score:
+            highest_score = composite_score
+            best_match = cand
+            best_reasons = reasons
+
+    score_percentage = round(highest_score * 100, 1)
+    is_duplicate = (highest_score >= 0.65) or (
+        highest_score >= 0.55 and any("Identical Date" in r for r in best_reasons)
     )
 
     return is_duplicate, best_match, score_percentage, best_reasons

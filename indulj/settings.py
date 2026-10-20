@@ -6,12 +6,13 @@ from dotenv import load_dotenv
 from decouple import config
 import dj_database_url
 
-load_dotenv()
-
 BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+load_dotenv()
 
 SECRET_KEY = config("SECRET_KEY", default="dev-secret-key-change-this")
 DEBUG = config("DEBUG", default=True, cast=bool)
+GEMINI_API_KEY = config("GEMINI_API_KEY", default=os.getenv("GEMINI_API_KEY", ""))
 
 ALLOWED_HOSTS = [
     "*",
