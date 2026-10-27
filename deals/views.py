@@ -19,6 +19,7 @@ def normalize_food_type_input(raw):
         return trimmed or "other"
     return str(raw)
 from django.db import IntegrityError
+from django.db.models import Q
 from rest_framework import status
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -37,8 +38,8 @@ from .serializers import (
     RejectDealSerializer,
     SavedDealSerializer,
     AdminCreateDealSerializer,
+    AdminUpdateDealSerializer,
 )
-from .image_enhancer import enhance_uploaded_image
 
 from django.utils import timezone
 from datetime import timedelta
@@ -48,6 +49,66 @@ from notifications.email_service import (
     send_happy_hour_notification_emails,
     send_deal_planned_email,
 )
+
+
+def enforce_two_active_happy_hour_deals_rule(restaurant, new_hh=None):
+    """
+    Enforce: Each restaurant can have at most 2 active Happy Hour Deals on any given day.
+    If activating new_hh causes any day to exceed 2 active Happy Hour Deals,
+    the oldest active Happy Hour Deal(s) on that day are expired.
+    """
+    from happy_hours.models import HappyHour
+    ALL_DAYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+    def expand_days(hh_obj):
+        days = []
+        raw_days = getattr(hh_obj, "days_of_week", None) or []
+        if isinstance(raw_days, list) and len(raw_days) > 0:
+            for d in raw_days:
+                dl = str(d).lower().strip()
+                if dl in ("everyday", "all", "daily"):
+                    return set(ALL_DAYS)
+                elif dl == "weekdays":
+                    days.extend(["monday", "tuesday", "wednesday", "thursday", "friday"])
+                elif dl == "weekends":
+                    days.extend(["saturday", "sunday"])
+                elif dl in ALL_DAYS:
+                    days.append(dl)
+        elif getattr(hh_obj, "date", None):
+            days.append(hh_obj.date.strftime("%A").lower())
+        elif getattr(hh_obj, "deal", None) and getattr(hh_obj.deal, "day_of_week", None):
+            dl = str(hh_obj.deal.day_of_week).lower().strip()
+            if dl in ("everyday", "all", "daily"):
+                return set(ALL_DAYS)
+            elif dl == "weekdays":
+                days.extend(["monday", "tuesday", "wednesday", "thursday", "friday"])
+            elif dl == "weekends":
+                days.extend(["saturday", "sunday"])
+            elif dl in ALL_DAYS:
+                days.append(dl)
+        return set(days) if days else set(ALL_DAYS)
+
+    active_qs = HappyHour.objects.filter(
+        restaurant=restaurant,
+        is_deal=True,
+        status="active"
+    ).order_by("created_at", "id")
+
+    if new_hh and getattr(new_hh, "pk", None):
+        active_qs = active_qs.exclude(pk=new_hh.pk)
+
+    active_list = list(active_qs)
+    new_days = expand_days(new_hh) if new_hh else set(ALL_DAYS)
+
+    expired_ids = set()
+    for day in new_days:
+        deals_on_day = [d for d in active_list if d.id not in expired_ids and day in expand_days(d)]
+        while len(deals_on_day) >= 2:
+            oldest = deals_on_day.pop(0)
+            expired_ids.add(oldest.id)
+
+    if expired_ids:
+        HappyHour.objects.filter(id__in=expired_ids).update(status="expired")
 
 
 def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_approved=True):
@@ -119,25 +180,24 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
 
     status_val = "active" if is_approved else "pending"
 
-    # Enforce: "Each restaurant should have only one active Happy Hour Deal at a time."
-    if status_val == "active":
-        HappyHour.objects.filter(
-            restaurant=restaurant,
-            is_deal=True,
-            status="active"
-        ).update(status="expired")
-
     hh_date = data.get("hh_date") or None
 
-    raw_public = data.get("hh_is_public")
-    if raw_public is None:
-        raw_public = data.get("is_public")
-    if raw_public is None:
-        is_public_val = True
-    elif isinstance(raw_public, bool):
-        is_public_val = raw_public
+    # Multi-day parsing for Happy Hour Deals
+    raw_days = data.get("days_of_week") or data.get("hh_days_of_week")
+    if raw_days:
+        if isinstance(raw_days, str):
+            import json
+            try:
+                raw_days = json.loads(raw_days)
+            except Exception:
+                raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
+        if not isinstance(raw_days, list):
+            raw_days = [str(raw_days).lower()]
+        hh_days_of_week = [str(d).lower().strip() for d in raw_days if str(d).strip()]
+    elif getattr(deal, "day_of_week", None):
+        hh_days_of_week = [deal.day_of_week]
     else:
-        is_public_val = str(raw_public).lower() in ["true", "1", "yes"]
+        hh_days_of_week = ["everyday"]
 
     hh = HappyHour.objects.create(
         deal=deal,
@@ -153,13 +213,17 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
         date=hh_date,
         start_time=s_time,
         end_time=e_time,
-        days_of_week=[deal.day_of_week] if getattr(deal, "day_of_week", None) else ["everyday"],
+        days_of_week=hh_days_of_week,
         location=data.get("location_branch") or getattr(deal, "location_branch", "") or restaurant.address or restaurant.city or "",
         discount_offer=hh_discount,
         status=status_val,
-        is_public=is_public_val,
+        is_public=True,
         image=happy_hour_image,
     )
+
+    # Enforce: "Each restaurant can have at most 2 active Happy Hour Deals on any given day"
+    if status_val == "active":
+        enforce_two_active_happy_hour_deals_rule(restaurant, hh)
 
     if hh.status == "active":
         send_happy_hour_notification_emails(hh)
@@ -200,7 +264,13 @@ class PublicDealListView(APIView):
 
         search = request.query_params.get("search")
         if search:
-            qs = qs.filter(title__icontains=search)
+            qs = qs.filter(
+                Q(title__icontains=search) |
+                Q(description__icontains=search) |
+                Q(restaurant__name__icontains=search) |
+                Q(food_type__icontains=search) |
+                Q(location_branch__icontains=search)
+            )
 
         serializer = DealListSerializer(qs, many=True, context={"request": request})
 
@@ -263,7 +333,7 @@ class MapDealsView(APIView):
                 "latitude": deal.restaurant.latitude,
                 "longitude": deal.restaurant.longitude,
                 "is_hot_deal": deal.is_hot_deal,
-                "price": str(deal.price),
+                "price": str(deal.price) if deal.price is not None else None,
                 "food_type": deal.food_type,
                 "day_of_week": deal.day_of_week,
             }
@@ -325,7 +395,10 @@ class SubmitDealView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        serializer = SubmitDealSerializer(data=request.data)
+        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if req_data.get('price') in ['', 'null', 'None']:
+            req_data['price'] = None
+        serializer = SubmitDealSerializer(data=req_data)
 
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -355,6 +428,18 @@ class SubmitDealView(APIView):
             restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
             restaurant.save(update_fields=["operating_hours"])
 
+        raw_days = data.get("days_of_week") or request.data.get("days_of_week")
+        if raw_days:
+            if isinstance(raw_days, str):
+                import json
+                try:
+                    raw_days = json.loads(raw_days)
+                except Exception:
+                    raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
+            days_of_week_val = [str(d).lower().strip() for d in raw_days if str(d).strip()] if isinstance(raw_days, list) else [str(raw_days).lower()]
+        else:
+            days_of_week_val = [data.get("day_of_week")] if data.get("day_of_week") else ["everyday"]
+
         deal = Deal.objects.create(
             restaurant=restaurant,
             submitted_by=request.user,
@@ -364,11 +449,20 @@ class SubmitDealView(APIView):
             price=data.get("price"),
             food_type=normalize_food_type_input(request.data.get("food_type") or data.get("food_type")),
             day_of_week=data.get("day_of_week"),
+            days_of_week=days_of_week_val,
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
             end_time=data.get("end_time"),
             location_branch=data.get("location_branch", ""),
-            image=enhance_uploaded_image(data.get("image")),
+            discount_percentage=(
+                data.get("discount_percentage")
+                or data.get("discount_offer")
+                or request.data.get("discount_percentage")
+                or request.data.get("discount_offer")
+                or request.data.get("hh_discount_offer")
+                or ""
+            ),
+            image=data.get("image"),
             status="pending",
         )
 
@@ -604,29 +698,21 @@ class RestaurantCreateDealView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check Free tier 10 submissions limit
-        is_premium = (restaurant.subscription_plan or "").lower() == "premium"
-        if not is_premium:
-            from happy_hours.models import HappyHour
-            total_submissions = (
-                Deal.objects.filter(restaurant=restaurant).count()
-                + HappyHour.objects.filter(restaurant=restaurant, deal__isnull=True).count()
-            )
-            if total_submissions >= 10:
-                return Response(
-                    {
-                        "success": False,
-                        "message": "Free tier limit reached (10 deals & happy hours). Please upgrade to the Premium Plan ($99/mo) for unlimited submissions.",
-                        "limit_reached": True,
-                    },
-                    status=status.HTTP_403_FORBIDDEN,
-                )
-
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if req_data.get('price') in ['', 'null', 'None']:
+            req_data['price'] = None
+        if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
+            req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
         if 'food_type' in req_data:
             req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
-        if 'image' in req_data and req_data['image']:
-            req_data['image'] = enhance_uploaded_image(req_data['image'])
+        if 'days_of_week' in req_data:
+            raw_d = req_data.get('days_of_week')
+            if isinstance(raw_d, str):
+                import json
+                try:
+                    req_data['days_of_week'] = json.loads(raw_d)
+                except Exception:
+                    req_data['days_of_week'] = [x.strip().lower() for x in raw_d.split(',') if x.strip()]
         serializer = CreateDealSerializer(data=req_data)
 
         if not serializer.is_valid():
@@ -641,25 +727,6 @@ class RestaurantCreateDealView(APIView):
             created_by_role="restaurant",
             status="active",
         )
-
-        # Duplicate deal detection
-        try:
-            from .duplicate_detector import detect_deal_duplicates
-            is_dup, match_deal, score, reasons = detect_deal_duplicates(deal)
-            if is_dup and match_deal:
-                deal.is_potential_duplicate = True
-                deal.duplicate_of = match_deal
-                deal.duplicate_score = score
-                deal.duplicate_reasons = reasons
-                deal.save(update_fields=[
-                    "is_potential_duplicate",
-                    "duplicate_of",
-                    "duplicate_score",
-                    "duplicate_reasons",
-                ])
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Restaurant deal duplicate check failed: {e}")
 
         raw_post_hh = request.data.get("post_to_happy_hour")
         if raw_post_hh in [True, "true", "True", "1", 1]:
@@ -719,39 +786,31 @@ class RestaurantUpdateDeleteDealView(APIView):
             )
 
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if req_data.get('price') in ['', 'null', 'None']:
+            req_data['price'] = None
+        if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
+            req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
         if 'food_type' in req_data:
             req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
-        if 'image' in req_data and req_data['image']:
-            req_data['image'] = enhance_uploaded_image(req_data['image'])
+        if 'days_of_week' in req_data:
+            raw_d = req_data.get('days_of_week')
+            if isinstance(raw_d, str):
+                import json
+                try:
+                    req_data['days_of_week'] = json.loads(raw_d)
+                except Exception:
+                    req_data['days_of_week'] = [x.strip().lower() for x in raw_d.split(',') if x.strip()]
         serializer = CreateDealSerializer(deal, data=req_data, partial=True)
 
         if serializer.is_valid():
             new_status = deal.status if deal.status in ["active", "draft", "cancelled"] else "active"
             serializer.save(status=new_status, rejection_reason="")
 
-            try:
-                from happy_hours.models import HappyHour
-                for hh in HappyHour.objects.filter(deal=deal):
-                    if "hh_group_size" in req_data:
-                        try:
-                            hh.group_size = int(req_data["hh_group_size"])
-                        except (ValueError, TypeError):
-                            pass
-                    if "is_public" in req_data or "hh_is_public" in req_data:
-                        raw_pub = req_data.get("hh_is_public", req_data.get("is_public"))
-                        hh.is_public = str(raw_pub).lower() in ["true", "1", "yes"] if not isinstance(raw_pub, bool) else raw_pub
-                    hh.title = deal.title
-                    hh.description = deal.description
-                    hh.save()
-            except Exception:
-                pass
-
             return Response({
                 "success": True,
                 "message": "Deal updated successfully.",
                 "data": DealListSerializer(deal, context={"request": request}).data,
             })
-
 
         return Response(
             {"success": False, "errors": serializer.errors},
@@ -815,11 +874,7 @@ class RestaurantApproveDealView(APIView):
 
         from happy_hours.models import HappyHour
         for hh in HappyHour.objects.filter(deal=deal, status="pending"):
-            HappyHour.objects.filter(
-                restaurant=deal.restaurant,
-                is_deal=True,
-                status="active"
-            ).exclude(pk=hh.pk).update(status="expired")
+            enforce_two_active_happy_hour_deals_rule(deal.restaurant, hh)
             hh.status = "active"
             hh.rejection_reason = ""
             hh.accepted_at = timezone.now()
@@ -889,7 +944,12 @@ class AdminCreateDealView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        serializer = AdminCreateDealSerializer(data=request.data)
+        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if req_data.get('price') in ['', 'null', 'None']:
+            req_data['price'] = None
+        if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
+            req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
+        serializer = AdminCreateDealSerializer(data=req_data)
 
         if not serializer.is_valid():
             return Response(
@@ -913,11 +973,14 @@ class AdminCreateDealView(APIView):
                 status="active",
             ).first()
 
-        if restaurant and request.user.is_employee_admin and restaurant.registered_by_id != request.user.id:
-            return Response(
-                {"success": False, "message": "Permission denied. You can only create deals for restaurants registered under your reference."},
-                status=status.HTTP_403_FORBIDDEN,
-            )
+        deal_status = "active"
+        if request.user.is_employee_admin:
+            if restaurant and restaurant.registered_by_id == request.user.id:
+                deal_status = "active"
+            else:
+                deal_status = "pending"
+        elif request.user.is_super_admin:
+            deal_status = "active"
 
         if not restaurant:
             restaurant = Restaurant.objects.create(
@@ -928,6 +991,8 @@ class AdminCreateDealView(APIView):
                 operating_hours={"open": "09:00", "close": "23:00"},
                 registered_by=request.user if request.user.is_employee_admin else None
             )
+            if request.user.is_employee_admin:
+                deal_status = "active"
 
         # Check / set operating hours
         operating_hours = restaurant.operating_hours
@@ -935,44 +1000,44 @@ class AdminCreateDealView(APIView):
             restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
             restaurant.save(update_fields=["operating_hours"])
 
+        raw_days = data.get("days_of_week") or request.data.get("days_of_week")
+        if raw_days:
+            if isinstance(raw_days, str):
+                import json
+                try:
+                    raw_days = json.loads(raw_days)
+                except Exception:
+                    raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
+            days_of_week_val = [str(d).lower().strip() for d in raw_days if str(d).strip()] if isinstance(raw_days, list) else [str(raw_days).lower()]
+        else:
+            days_of_week_val = [data.get("day_of_week")] if data.get("day_of_week") else ["everyday"]
+
         deal = Deal.objects.create(
             restaurant=restaurant,
             submitted_by=request.user,
             created_by_role="admin",
             title=data["title"],
             description=data["description"],
-            price=data["price"],
+            price=data.get("price"),
             food_type=normalize_food_type_input(request.data.get("food_type") or data.get("food_type")),
             day_of_week=data["day_of_week"],
+            days_of_week=days_of_week_val,
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
             end_time=data.get("end_time"),
             location_branch=data.get("location_branch", ""),
-            discount_percentage=data.get("discount_percentage", ""),
-            image=enhance_uploaded_image(data.get("image")),
+            discount_percentage=(
+                data.get("discount_percentage")
+                or request.data.get("discount_percentage")
+                or request.data.get("discount_offer")
+                or request.data.get("hh_discount_offer")
+                or ""
+            ),
+            image=data.get("image"),
             is_hot_deal=data.get("is_hot_deal", False),
             expires_at=data.get("expires_at"),
-            status=data.get("status", "active"),
+            status=deal_status,
         )
-
-        # Duplicate deal detection
-        try:
-            from .duplicate_detector import detect_deal_duplicates
-            is_dup, match_deal, score, reasons = detect_deal_duplicates(deal)
-            if is_dup and match_deal:
-                deal.is_potential_duplicate = True
-                deal.duplicate_of = match_deal
-                deal.duplicate_score = score
-                deal.duplicate_reasons = reasons
-                deal.save(update_fields=[
-                    "is_potential_duplicate",
-                    "duplicate_of",
-                    "duplicate_score",
-                    "duplicate_reasons",
-                ])
-        except Exception as e:
-            import logging
-            logging.getLogger(__name__).warning(f"Admin deal duplicate check failed: {e}")
 
         post_to_happy_hour = data.get("post_to_happy_hour", False) or (request.data.get("post_to_happy_hour") in [True, "true", "True", "1", 1])
         if post_to_happy_hour:
@@ -985,16 +1050,36 @@ class AdminCreateDealView(APIView):
                 is_approved=(deal.status == "active")
             )
 
-
-
-
         if deal.status == "active":
             send_deal_notification_emails(deal)
+        else:
+            notify_admins(
+                type="deal",
+                title="New Deal Submitted by Sub-Admin",
+                message=f"Sub-admin {request.user.full_name or request.user.email} submitted deal '{deal.title}' for {restaurant.name} awaiting approval.",
+                related_deal=deal,
+            )
+            if restaurant.owner:
+                create_notification(
+                    user=restaurant.owner,
+                    type="deal",
+                    title="New Deal Submitted for Approval",
+                    message=f"A new deal '{deal.title}' was submitted for your restaurant and is pending approval.",
+                    related_deal=deal,
+                )
 
         return Response(
             {
                 "success": True,
-                "message": "Deal created successfully." if not post_to_happy_hour else "Deal and Happy Hour created successfully.",
+                "message": (
+                    "Deal created successfully."
+                    if deal.status == "active"
+                    else "Deal submitted for approval."
+                ) if not post_to_happy_hour else (
+                    "Deal and Happy Hour created successfully."
+                    if deal.status == "active"
+                    else "Deal and Happy Hour submitted for approval."
+                ),
                 "data": DealListSerializer(
                     deal,
                     context={"request": request},
@@ -1004,6 +1089,113 @@ class AdminCreateDealView(APIView):
         )
 
 
+class AdminUpdateDealView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_object(self, request, pk):
+        try:
+            deal = Deal.objects.select_related("restaurant", "submitted_by").get(pk=pk)
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                if deal.submitted_by_id == request.user.id:
+                    return deal
+                return None
+            return deal
+        except Deal.DoesNotExist:
+            return None
+
+    def get(self, request, pk):
+        deal = self.get_object(request, pk)
+        if not deal:
+            return Response(
+                {"success": False, "message": "Deal not found or access denied."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+        return Response({
+            "success": True,
+            "data": DealListSerializer(deal, context={"request": request}).data,
+        })
+
+    def put(self, request, pk):
+        deal = self.get_object(request, pk)
+        if not deal:
+            return Response(
+                {"success": False, "message": "Deal not found or access denied."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        req_data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if req_data.get("price") in ["", "null", "None"]:
+            req_data["price"] = None
+        if not req_data.get("discount_percentage") and (req_data.get("discount_offer") or req_data.get("hh_discount_offer")):
+            req_data["discount_percentage"] = req_data.get("discount_offer") or req_data.get("hh_discount_offer")
+        if "food_type" in req_data:
+            req_data["food_type"] = normalize_food_type_input(req_data["food_type"])
+        if "days_of_week" in req_data:
+            raw_d = req_data.get("days_of_week")
+            if isinstance(raw_d, str):
+                import json
+                try:
+                    req_data["days_of_week"] = json.loads(raw_d)
+                except Exception:
+                    req_data["days_of_week"] = [x.strip().lower() for x in raw_d.split(",") if x.strip()]
+
+        serializer = AdminUpdateDealSerializer(deal, data=req_data, partial=True)
+        if not serializer.is_valid():
+            return Response(
+                {"success": False, "errors": serializer.errors},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated_deal = serializer.save()
+
+        # Keep any linked Happy Hour synced with updated fields
+        from happy_hours.models import HappyHour
+        linked_hhs = HappyHour.objects.filter(deal=updated_deal)
+        for hh in linked_hhs:
+            update_fields = []
+            if "title" in serializer.validated_data:
+                hh.title = updated_deal.title
+                update_fields.append("title")
+            if "description" in serializer.validated_data:
+                hh.description = updated_deal.description or ""
+                update_fields.append("description")
+            if "start_time" in serializer.validated_data and updated_deal.start_time:
+                hh.start_time = updated_deal.start_time
+                update_fields.append("start_time")
+            if "end_time" in serializer.validated_data and updated_deal.end_time:
+                hh.end_time = updated_deal.end_time
+                update_fields.append("end_time")
+            if "location_branch" in serializer.validated_data:
+                hh.location = updated_deal.location_branch
+                update_fields.append("location")
+            if "discount_percentage" in serializer.validated_data and updated_deal.discount_percentage:
+                hh.discount_offer = f"{updated_deal.discount_percentage}% OFF"
+                update_fields.append("discount_offer")
+            if "status" in serializer.validated_data:
+                hh.status = updated_deal.status
+                update_fields.append("status")
+            raw_days = request.data.get("days_of_week") or request.data.get("hh_days_of_week")
+            if raw_days:
+                import json
+                if isinstance(raw_days, str):
+                    try:
+                        raw_days = json.loads(raw_days)
+                    except Exception:
+                        raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
+                if isinstance(raw_days, list):
+                    hh.days_of_week = [str(d).lower().strip() for d in raw_days if str(d).strip()]
+                    update_fields.append("days_of_week")
+            if update_fields:
+                hh.save(update_fields=update_fields)
+
+        return Response({
+            "success": True,
+            "message": "Deal updated successfully.",
+            "data": DealListSerializer(updated_deal, context={"request": request}).data,
+        })
+
+
 class AdminDealListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
@@ -1011,7 +1203,7 @@ class AdminDealListView(APIView):
         qs = Deal.objects.select_related("restaurant", "submitted_by").filter(restaurant__status="active")
 
         if request.user.is_employee_admin:
-            qs = qs.filter(restaurant__registered_by=request.user)
+            qs = qs.filter(Q(restaurant__registered_by=request.user) | Q(submitted_by=request.user))
         elif request.user.is_super_admin:
             registered_by_param = request.query_params.get("registered_by")
             if registered_by_param:
@@ -1095,11 +1287,7 @@ class AdminApproveDealView(APIView):
             )
         from happy_hours.models import HappyHour
         for hh in HappyHour.objects.filter(deal=deal, status="pending"):
-            HappyHour.objects.filter(
-                restaurant=deal.restaurant,
-                is_deal=True,
-                status="active"
-            ).exclude(pk=hh.pk).update(status="expired")
+            enforce_two_active_happy_hour_deals_rule(deal.restaurant, hh)
             hh.status = "active"
             hh.rejection_reason = ""
             hh.accepted_at = timezone.now()
@@ -1219,11 +1407,7 @@ class AdminAcceptAllDealsView(APIView):
             deal.status = "active"
             send_deal_notification_emails(deal)
             for hh in HappyHour.objects.filter(deal=deal, status="pending"):
-                HappyHour.objects.filter(
-                    restaurant=deal.restaurant,
-                    is_deal=True,
-                    status="active"
-                ).exclude(pk=hh.pk).update(status="expired")
+                enforce_two_active_happy_hour_deals_rule(deal.restaurant, hh)
                 hh.status = "active"
                 hh.rejection_reason = ""
                 hh.accepted_at = timezone.now()
@@ -1264,9 +1448,17 @@ class AdminDismissDealDuplicateView(APIView):
 
     def post(self, request, pk):
         try:
-            deal = Deal.objects.get(pk=pk)
+            deal = Deal.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
         except Deal.DoesNotExist:
-            return Response({"success": False, "message": "Deal not found."}, status=status.HTTP_404_NOT_FOUND)
+            return Response(
+                {"success": False, "message": "Deal not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
         deal.is_potential_duplicate = False
         deal.duplicate_reasons = []
@@ -1277,4 +1469,4 @@ class AdminDismissDealDuplicateView(APIView):
             "success": True,
             "message": f"Duplicate flag dismissed for '{deal.title}'.",
             "data": DealListSerializer(deal, context={"request": request}).data,
-        })
+        })

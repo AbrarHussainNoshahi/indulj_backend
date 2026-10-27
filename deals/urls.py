@@ -20,6 +20,7 @@ from .views import (
     RestaurantRejectDealView,
 
     AdminCreateDealView,
+    AdminUpdateDealView,
     AdminDealListView,
     AdminApproveDealView,
     AdminToggleHotDealView,
@@ -55,6 +56,8 @@ urlpatterns = [
     # Admin
     path("admin/", AdminDealListView.as_view()),
     path("admin/create/", AdminCreateDealView.as_view()),
+    path("admin/<int:pk>/", AdminUpdateDealView.as_view()),
+    path("admin/<int:pk>/update/", AdminUpdateDealView.as_view()),
     path("admin/accept-all/", AdminAcceptAllDealsView.as_view()),
     path("admin/<int:pk>/approve/", AdminApproveDealView.as_view()),
     path("admin/<int:pk>/reject/", AdminRejectDealView.as_view()),

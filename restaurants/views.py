@@ -355,6 +355,348 @@ class AdminChangeRestaurantPlanView(APIView):
         )
 
 
+class AdminRestaurantGalleryView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_restaurant(self, request, restaurant_id):
+        try:
+            restaurant = Restaurant.objects.get(pk=restaurant_id)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id and restaurant.owner_id is not None:
+                return None
+            return restaurant
+        except Restaurant.DoesNotExist:
+            return None
+
+    def post(self, request, restaurant_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        image = request.FILES.get("image")
+        if not image:
+            return Response(
+                {"success": False, "message": "Image is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        gallery_item = RestaurantGallery.objects.create(
+            restaurant=restaurant,
+            image=image,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Image added",
+                "data": GallerySerializer(
+                    gallery_item,
+                    context={"request": request},
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, restaurant_id, image_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            image = RestaurantGallery.objects.get(
+                id=image_id,
+                restaurant=restaurant,
+            )
+        except RestaurantGallery.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Image not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        image.delete()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Image removed",
+            }
+        )
+
+
+class AdminRestaurantMenuView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def get_restaurant(self, request, restaurant_id):
+        try:
+            restaurant = Restaurant.objects.get(pk=restaurant_id)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id and restaurant.owner_id is not None:
+                return None
+            return restaurant
+        except Restaurant.DoesNotExist:
+            return None
+
+    def post(self, request, restaurant_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        name = request.data.get("name")
+        if not name or not str(name).strip():
+            return Response(
+                {"success": False, "message": "Menu name is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        price = request.data.get("price", "")
+        description = request.data.get("description") or request.data.get("bio") or ""
+        categories_raw = request.data.get("categories", [])
+
+        categories = []
+        if isinstance(categories_raw, str):
+            try:
+                parsed = json.loads(categories_raw)
+                if isinstance(parsed, list):
+                    categories = [str(c).strip().strip('"').strip("'") for c in parsed if str(c).strip()]
+                elif isinstance(parsed, str):
+                    categories = [parsed.strip().strip('"').strip("'")]
+            except Exception:
+                cleaned = categories_raw.strip().lstrip("[").rstrip("]")
+                categories = [c.strip().strip('"').strip("'") for c in cleaned.split(",") if c.strip()]
+        elif isinstance(categories_raw, list):
+            for item in categories_raw:
+                if isinstance(item, str) and item.startswith("[") and item.endswith("]"):
+                    try:
+                        sub = json.loads(item)
+                        if isinstance(sub, list):
+                            categories.extend([str(x).strip().strip('"').strip("'") for x in sub if str(x).strip()])
+                            continue
+                    except Exception:
+                        pass
+                categories.append(str(item).strip().strip('"').strip("'"))
+
+        clean_categories = []
+        for c in categories:
+            clean_c = str(c).strip().strip('"').strip("'").lstrip("[").rstrip("]")
+            if clean_c and clean_c not in clean_categories:
+                clean_categories.append(clean_c)
+        categories = clean_categories
+
+        image = request.FILES.get("image") or request.FILES.get("picture")
+
+        menu_item = RestaurantMenuItem.objects.create(
+            restaurant=restaurant,
+            name=str(name).strip(),
+            price=str(price).strip(),
+            categories=categories,
+            description=str(description).strip(),
+            image=image,
+        )
+
+        return Response(
+            {
+                "success": True,
+                "message": "Menu item added successfully",
+                "data": RestaurantMenuItemSerializer(
+                    menu_item,
+                    context={"request": request},
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, restaurant_id, item_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            item = RestaurantMenuItem.objects.get(
+                id=item_id,
+                restaurant=restaurant,
+            )
+        except RestaurantMenuItem.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Menu item not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        item.delete()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Menu item deleted successfully",
+            }
+        )
+
+    def put(self, request, restaurant_id, item_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        try:
+            item = RestaurantMenuItem.objects.get(
+                id=item_id,
+                restaurant=restaurant,
+            )
+        except RestaurantMenuItem.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Menu item not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        name = request.data.get("name")
+        if name is not None:
+            if not str(name).strip():
+                return Response(
+                    {"success": False, "message": "Menu name cannot be empty"},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            item.name = str(name).strip()
+
+        if "price" in request.data:
+            item.price = str(request.data.get("price", "")).strip()
+
+        if "description" in request.data or "bio" in request.data:
+            desc = request.data.get("description") if "description" in request.data else request.data.get("bio")
+            item.description = str(desc or "").strip()
+
+        if "categories" in request.data:
+            categories_raw = request.data.get("categories", [])
+            categories = []
+            if isinstance(categories_raw, str):
+                try:
+                    parsed = json.loads(categories_raw)
+                    if isinstance(parsed, list):
+                        categories = [str(c).strip().strip('"').strip("'") for c in parsed if str(c).strip()]
+                    elif isinstance(parsed, str):
+                        categories = [parsed.strip().strip('"').strip("'")]
+                except Exception:
+                    cleaned = categories_raw.strip().lstrip("[").rstrip("]")
+                    categories = [c.strip().strip('"').strip("'") for c in cleaned.split(",") if c.strip()]
+            elif isinstance(categories_raw, list):
+                for item_cat in categories_raw:
+                    if isinstance(item_cat, str) and item_cat.startswith("[") and item_cat.endswith("]"):
+                        try:
+                            sub = json.loads(item_cat)
+                            if isinstance(sub, list):
+                                categories.extend([str(x).strip().strip('"').strip("'") for x in sub if str(x).strip()])
+                                continue
+                        except Exception:
+                            pass
+                    categories.append(str(item_cat).strip().strip('"').strip("'"))
+
+            clean_categories = []
+            for c in categories:
+                clean_c = str(c).strip().strip('"').strip("'").lstrip("[").rstrip("]")
+                if clean_c and clean_c not in clean_categories:
+                    clean_categories.append(clean_c)
+            item.categories = clean_categories
+
+        image = request.FILES.get("image") or request.FILES.get("picture")
+        if image:
+            item.image = image
+
+        item.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Menu item updated successfully",
+                "data": RestaurantMenuItemSerializer(
+                    item,
+                    context={"request": request},
+                ).data,
+            }
+        )
+
+
+class AdminRestaurantFullMenuView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def get_restaurant(self, request, restaurant_id):
+        try:
+            restaurant = Restaurant.objects.get(pk=restaurant_id)
+            if request.user.is_employee_admin and restaurant.registered_by_id != request.user.id and restaurant.owner_id is not None:
+                return None
+            return restaurant
+        except Restaurant.DoesNotExist:
+            return None
+
+    def post(self, request, restaurant_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        menu_file = request.FILES.get("menu_file") or request.FILES.get("file")
+        if not menu_file:
+            return Response(
+                {"success": False, "message": "Please select a menu file to upload (image, PDF, or document)."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if restaurant.menu_file:
+            restaurant.menu_file.delete(save=False)
+
+        restaurant.menu_file = menu_file
+        original_name = request.data.get("menu_file_name") or getattr(menu_file, "name", "")
+        restaurant.menu_file_name = original_name
+        restaurant.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Full menu uploaded successfully",
+                "data": {
+                    "menu_file_url": request.build_absolute_uri(restaurant.menu_file.url) if restaurant.menu_file else None,
+                    "menu_file_name": restaurant.menu_file_name,
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def delete(self, request, restaurant_id):
+        restaurant = self.get_restaurant(request, restaurant_id)
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if restaurant.menu_file:
+            restaurant.menu_file.delete(save=False)
+        restaurant.menu_file = None
+        restaurant.menu_file_name = None
+        restaurant.save()
+
+        return Response(
+            {
+                "success": True,
+                "message": "Full menu deleted successfully",
+            }
+        )
+
+
 class MyRestaurantView(APIView):
     permission_classes = [IsAuthenticated, IsRestaurant]
     parser_classes = [MultiPartParser, FormParser, JSONParser]

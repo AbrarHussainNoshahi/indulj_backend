@@ -9,7 +9,7 @@ class AdminCreateDealSerializer(serializers.Serializer):
     restaurant_name = serializers.CharField()
     title = serializers.CharField()
     description = serializers.CharField()
-    price = serializers.DecimalField(max_digits=8, decimal_places=2)
+    price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
 
     food_type = serializers.CharField(required=False, allow_blank=True, default="other")
     day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES)
@@ -38,6 +38,38 @@ class AdminCreateDealSerializer(serializers.Serializer):
     hh_event_type = serializers.CharField(required=False, default="casual")
     hh_vibe = serializers.CharField(required=False, default="casual")
     hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
+    days_of_week = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    hh_days_of_week = serializers.CharField(required=False, allow_blank=True, default="")
+
+
+# ─────────────────────────────────────────────
+# ADMIN UPDATE DEAL
+# ─────────────────────────────────────────────
+class AdminUpdateDealSerializer(serializers.ModelSerializer):
+    price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
+    food_type = serializers.CharField(required=False, allow_blank=True, default="other")
+
+    class Meta:
+        model = Deal
+        fields = [
+            "title",
+            "description",
+            "price",
+            "food_type",
+            "food_types",
+            "day_of_week",
+            "days_of_week",
+            "start_time",
+            "end_time",
+            "has_time_slots",
+            "location_branch",
+            "discount_percentage",
+            "image",
+            "is_hot_deal",
+            "expires_at",
+            "status",
+            "rejection_reason",
+        ]
 
 
 # ─────────────────────────────────────────────
@@ -60,11 +92,36 @@ class DealListSerializer(serializers.ModelSerializer):
 
     latitude = serializers.FloatField(source="restaurant.latitude", read_only=True)
     longitude = serializers.FloatField(source="restaurant.longitude", read_only=True)
+    restaurant_phone = serializers.CharField(source="restaurant.phone", read_only=True, default="")
+    restaurant_address = serializers.CharField(source="restaurant.address", read_only=True, default="")
+    restaurant_rating = serializers.FloatField(source="restaurant.rating", read_only=True, default=0.0)
+    restaurant_reviews = serializers.IntegerField(source="restaurant.total_reviews", read_only=True, default=0)
     restaurant_is_registered = serializers.SerializerMethodField()
 
     duplicate_of_id = serializers.IntegerField(source="duplicate_of.id", read_only=True)
     duplicate_of_title = serializers.CharField(source="duplicate_of.title", read_only=True)
     duplicate_of = serializers.SerializerMethodField()
+    days_of_week = serializers.SerializerMethodField()
+
+    def get_days_of_week(self, obj):
+        raw = getattr(obj, "days_of_week", None)
+        if raw and isinstance(raw, list) and len(raw) > 0:
+            return [str(d).lower().strip() for d in raw]
+        linked_hh = getattr(obj, "linked_happy_hours", None)
+        if linked_hh:
+            first_hh = linked_hh.first()
+            if first_hh and first_hh.days_of_week:
+                return [str(d).lower().strip() for d in first_hh.days_of_week]
+        day = (obj.day_of_week or "").lower().strip()
+        if day in ("everyday", "all", "daily"):
+            return ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+        elif day == "weekdays":
+            return ["monday", "tuesday", "wednesday", "thursday", "friday"]
+        elif day == "weekends":
+            return ["saturday", "sunday"]
+        elif day:
+            return [day]
+        return ["everyday"]
 
     def get_restaurant_is_registered(self, obj):
         return bool(obj.restaurant and obj.restaurant.owner_id is not None)
@@ -76,7 +133,7 @@ class DealListSerializer(serializers.ModelSerializer):
         return {
             "id": d.id,
             "title": d.title,
-            "price": str(d.price),
+            "price": str(d.price) if d.price is not None else None,
             "discount_percentage": d.discount_percentage,
             "day_of_week": d.day_of_week,
             "status": d.status,
@@ -95,6 +152,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "food_type",
             "food_types",
             "day_of_week",
+            "days_of_week",
             "start_time",
             "end_time",
             "has_time_slots",
@@ -110,6 +168,10 @@ class DealListSerializer(serializers.ModelSerializer):
             "restaurant",
             "restaurant_name",
             "restaurant_city",
+            "restaurant_phone",
+            "restaurant_address",
+            "restaurant_rating",
+            "restaurant_reviews",
             "restaurant_categories",
             "restaurant_is_registered",
             "submitted_by_name",
@@ -192,7 +254,9 @@ class SubmitDealSerializer(serializers.Serializer):
     restaurant_name = serializers.CharField()
     location_branch = serializers.CharField()
 
-    price = serializers.DecimalField(max_digits=8, decimal_places=2)
+    price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
+    discount_percentage = serializers.CharField(required=False, allow_blank=True, default="")
+    discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
 
     food_type = serializers.CharField(required=False, allow_blank=True, default="other")
     day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES)
@@ -214,12 +278,15 @@ class SubmitDealSerializer(serializers.Serializer):
     hh_event_type = serializers.CharField(required=False, allow_blank=True, default="casual")
     hh_vibe = serializers.CharField(required=False, allow_blank=True, default="casual")
     hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
+    days_of_week = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    hh_days_of_week = serializers.CharField(required=False, allow_blank=True, default="")
 
 
 # ─────────────────────────────────────────────
 # CREATE DEAL (MODEL)
 # ─────────────────────────────────────────────
 class CreateDealSerializer(serializers.ModelSerializer):
+    price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
     food_type = serializers.CharField(required=False, allow_blank=True, default="other")
     class Meta:
         model = Deal
@@ -230,6 +297,7 @@ class CreateDealSerializer(serializers.ModelSerializer):
             "food_type",
             "food_types",
             "day_of_week",
+            "days_of_week",
             "start_time",
             "end_time",
             "has_time_slots",

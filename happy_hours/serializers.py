@@ -216,6 +216,24 @@ class PlanHappyHourSerializer(serializers.Serializer):
         default="",
     )
 
+    latitude = serializers.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
+    )
+    longitude = serializers.DecimalField(
+        max_digits=9,
+        decimal_places=6,
+        required=False,
+        allow_null=True,
+    )
+    city = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
     phone_number = serializers.CharField(
         required=False,
         allow_blank=True,

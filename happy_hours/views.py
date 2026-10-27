@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.db.models import Q
 from rest_framework import status
 from notifications.utils import create_notification, notify_admins, check_and_expire_happy_hours
 from notifications.email_service import (
@@ -200,14 +201,26 @@ class PlanHappyHourView(APIView):
             if not restaurant:
                 restaurant = Restaurant.objects.filter(name__icontains=str(rest_input), status="active").first()
 
+        lat = data.get("latitude")
+        lng = data.get("longitude")
+        city_val = data.get("city") or (location_input.split(",")[-2].strip() if "," in location_input else location_input) or "Houston"
+
         if not restaurant and (rest_input or location_input):
             restaurant = Restaurant.objects.create(
                 name=str(rest_input) if rest_input else "Partner Restaurant",
-                city=location_input or "New York",
+                city=city_val,
                 address=location_input or "",
+                latitude=lat,
+                longitude=lng,
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
+        elif restaurant and lat and lng and (not restaurant.latitude or not restaurant.longitude):
+            restaurant.latitude = lat
+            restaurant.longitude = lng
+            if city_val and not restaurant.city:
+                restaurant.city = city_val
+            restaurant.save(update_fields=["latitude", "longitude", "city"] if city_val and not restaurant.city else ["latitude", "longitude"])
 
         if not restaurant:
             restaurant = Restaurant.objects.filter(status="active").first()
@@ -560,9 +573,29 @@ class RestaurantCreateHappyHourView(APIView):
             created_by_role="restaurant",
         )
 
+        lat = request.data.get("latitude")
+        lng = request.data.get("longitude")
+        city_val = request.data.get("city")
+        loc_val = request.data.get("location")
+        if lat and lng and (not restaurant.latitude or not restaurant.longitude):
+            try:
+                restaurant.latitude = float(lat)
+                restaurant.longitude = float(lng)
+                if city_val and not restaurant.city:
+                    restaurant.city = city_val
+                if loc_val and not restaurant.address:
+                    restaurant.address = loc_val
+                restaurant.save(update_fields=[f for f in ["latitude", "longitude", "city", "address"] if getattr(restaurant, f)])
+            except Exception:
+                pass
+
         if not happy_hour.status:
             happy_hour.status = "active"
             happy_hour.save(update_fields=["status"])
+
+        if happy_hour.is_deal and happy_hour.status == "active":
+            from deals.views import enforce_two_active_happy_hour_deals_rule
+            enforce_two_active_happy_hour_deals_rule(happy_hour.restaurant, happy_hour)
 
         # AI Duplicate detection
         try:
@@ -846,15 +879,244 @@ class RestaurantAcceptAllHappyHoursView(APIView):
         })
 
 
+class AdminPlanHappyHourView(APIView):
+    permission_classes = [IsAuthenticated, IsAdmin]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+
+    def post(self, request):
+        serializer = PlanHappyHourSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                {
+                    "success": False,
+                    "errors": serializer.errors,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = serializer.validated_data
+
+        # Resolve restaurant
+        rest_input = data.get("restaurant") or data.get("restaurant_name") or request.data.get("restaurant_name") or request.data.get("restaurant")
+        location_input = data.get("location") or request.data.get("location") or ""
+        restaurant = None
+
+        if rest_input:
+            if str(rest_input).isdigit():
+                restaurant = Restaurant.objects.filter(pk=int(rest_input), status="active").first()
+            if not restaurant:
+                restaurant = Restaurant.objects.filter(name__iexact=str(rest_input), status="active").first()
+            if not restaurant:
+                restaurant = Restaurant.objects.filter(name__icontains=str(rest_input), status="active").first()
+
+        lat = data.get("latitude") or request.data.get("latitude")
+        lng = data.get("longitude") or request.data.get("longitude")
+        city_val = data.get("city") or request.data.get("city") or (location_input.split(",")[-2].strip() if "," in location_input else location_input) or "Houston"
+
+        if not restaurant and (rest_input or location_input):
+            restaurant = Restaurant.objects.create(
+                name=str(rest_input) if rest_input else "Partner Restaurant",
+                city=city_val,
+                address=location_input or "",
+                latitude=lat,
+                longitude=lng,
+                status="active",
+                operating_hours={"open": "09:00", "close": "23:00"},
+                registered_by=request.user if request.user.is_employee_admin else None,
+            )
+        elif restaurant and lat and lng and (not restaurant.latitude or not restaurant.longitude):
+            restaurant.latitude = lat
+            restaurant.longitude = lng
+            if city_val and not restaurant.city:
+                restaurant.city = city_val
+            restaurant.save(update_fields=["latitude", "longitude", "city"] if city_val and not restaurant.city else ["latitude", "longitude"])
+
+        if not restaurant:
+            restaurant = Restaurant.objects.filter(status="active").first()
+
+        if not restaurant:
+            return Response(
+                {"success": False, "message": "Restaurant could not be resolved or found."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Check / set operating hours
+        operating_hours = restaurant.operating_hours
+        if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
+            restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
+            restaurant.save(update_fields=["operating_hours"])
+
+        # Approval status determination
+        status_val = "active"
+        if request.user.is_employee_admin:
+            if restaurant.registered_by_id == request.user.id:
+                status_val = "active"
+            else:
+                status_val = "pending"
+        elif request.user.is_super_admin:
+            status_val = "active"
+
+        date_val = data.get("date") or timezone.localdate()
+        title_val = data.get("title") or f"{restaurant.name} Happy Hour"
+        start_time_val = data.get("start_time") or "17:00:00"
+        end_time_val = data.get("end_time") or "20:00:00"
+
+        raw_image = data.get("image") or request.data.get("image")
+        enhanced_image = enhance_uploaded_image(raw_image) if raw_image else None
+
+        raw_discount = request.data.get("discount_offer") or data.get("discount_offer") or ""
+        is_deal_val = request.data.get("is_deal") in [True, "true", "True", "1", 1] or bool(request.data.get("is_happy_hour_deal"))
+
+        raw_days = request.data.get("days_of_week") or data.get("days_of_week") or []
+        if isinstance(raw_days, str):
+            import json
+            try:
+                raw_days = json.loads(raw_days)
+            except Exception:
+                raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
+        if not isinstance(raw_days, list):
+            raw_days = [str(raw_days).lower()]
+        hh_days_of_week = [str(d).lower().strip() for d in raw_days if str(d).strip()]
+
+        happy_hour = HappyHour.objects.create(
+            restaurant=restaurant,
+            submitted_by=request.user,
+            created_by_role="admin",
+            title=title_val,
+            description=data.get("description", ""),
+            event_type=data.get("event_type", "casual"),
+            group_size=data.get("group_size", 1),
+            start_time=start_time_val,
+            end_time=end_time_val,
+            date=date_val,
+            days_of_week=hh_days_of_week,
+            vibe=data.get("vibe", "casual"),
+            location=data.get("location") or restaurant.address or restaurant.city or "",
+            phone_number=data.get("phone_number", ""),
+            is_public=data.get("is_public", True),
+            image=enhanced_image,
+            specials=data.get("specials", []),
+            discount_offer=raw_discount,
+            is_deal=is_deal_val,
+            status=status_val,
+        )
+
+        # Enforce: "Each restaurant can have at most 2 active Happy Hour Deals on any given day"
+        if is_deal_val and status_val == "active":
+            from deals.views import enforce_two_active_happy_hour_deals_rule
+            enforce_two_active_happy_hour_deals_rule(restaurant, happy_hour)
+
+        # AI Duplicate detection
+        try:
+            is_dup, match_hh, score, reasons = detect_happy_hour_duplicates(happy_hour)
+            if is_dup and match_hh:
+                happy_hour.is_potential_duplicate = True
+                happy_hour.duplicate_of = match_hh
+                happy_hour.duplicate_score = score
+                happy_hour.duplicate_reasons = reasons
+                happy_hour.save(update_fields=[
+                    "is_potential_duplicate",
+                    "duplicate_of",
+                    "duplicate_score",
+                    "duplicate_reasons",
+                ])
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Happy hour duplicate detection error: {e}")
+
+        # Also create deal if requested
+        raw_also = request.data.get("also_add_to_deals")
+        also_add_deals = data.get("also_add_to_deals") or (raw_also in [True, "true", "True", "1", 1]) or is_deal_val
+
+        if also_add_deals:
+            try:
+                from deals.models import Deal
+                day_name = date_val.strftime("%A").lower() if hasattr(date_val, "strftime") else "everyday"
+                valid_days = [c[0] for c in Deal.DAY_CHOICES]
+                if day_name not in valid_days:
+                    day_name = "everyday"
+
+                raw_price = data.get("price") or request.data.get("price")
+                try:
+                    price_val = float(raw_price) if raw_price else None
+                except (ValueError, TypeError):
+                    price_val = None
+
+                deal_image = None
+                if happy_hour.image:
+                    deal_image = happy_hour.image.name
+
+                deal = Deal.objects.create(
+                    restaurant=restaurant,
+                    submitted_by=request.user,
+                    created_by_role="admin",
+                    title=f"{title_val}"[:200],
+                    description=data.get("description") or f"Happy Hour Special: {title_val}",
+                    food_type="other",
+                    price=price_val,
+                    day_of_week=day_name,
+                    has_time_slots=True,
+                    start_time=start_time_val,
+                    end_time=end_time_val,
+                    discount_percentage=raw_discount,
+                    image=deal_image,
+                    location_branch=data.get("location", "") or restaurant.address or "",
+                    status=status_val,
+                )
+                happy_hour.deal = deal
+                happy_hour.save(update_fields=["deal"])
+
+                if deal.status == "active":
+                    from notifications.email_service import send_deal_notification_emails
+                    send_deal_notification_emails(deal)
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).error(f"Failed to auto-create deal from admin happy hour: {e}", exc_info=True)
+
+        if happy_hour.status == "active":
+            send_happy_hour_notification_emails(happy_hour)
+        else:
+            notify_admins(
+                type="happy_hour",
+                title="New Happy Hour Submitted by Sub-Admin",
+                message=f"Sub-admin {request.user.full_name or request.user.email} planned happy hour '{happy_hour.title}' for {restaurant.name} awaiting approval.",
+                related_happy_hour=happy_hour,
+            )
+            if restaurant.owner:
+                create_notification(
+                    user=restaurant.owner,
+                    type="happy_hour",
+                    title="New Happy Hour Pending Approval",
+                    message=f"A happy hour '{happy_hour.title}' was scheduled for your restaurant and is pending approval.",
+                    related_happy_hour=happy_hour,
+                )
+
+        return Response(
+            {
+                "success": True,
+                "message": (
+                    "Happy Hour planned and approved successfully."
+                    if happy_hour.status == "active"
+                    else "Happy Hour planned and submitted for approval."
+                ),
+                "data": HappyHourDetailSerializer(
+                    happy_hour,
+                    context={"request": request},
+                ).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+
 class AdminHappyHourListView(APIView):
     permission_classes = [IsAuthenticated, IsAdmin]
 
     def get(self, request):
         check_and_expire_happy_hours()
-        qs = HappyHour.objects.select_related("restaurant", "submitted_by").filter(restaurant__status="active")
+        qs = HappyHour.objects.select_related("restaurant", "submitted_by", "deal").filter(restaurant__status="active")
 
         if request.user.is_employee_admin:
-            qs = qs.filter(restaurant__registered_by=request.user)
+            qs = qs.filter(Q(restaurant__registered_by=request.user) | Q(submitted_by=request.user))
         elif request.user.is_super_admin:
             registered_by_param = request.query_params.get("registered_by")
             if registered_by_param:
@@ -897,8 +1159,10 @@ class AdminHappyHourDetailView(APIView):
 
     def get_object(self, request, pk):
         try:
-            hh = HappyHour.objects.select_related("restaurant", "submitted_by").get(pk=pk)
+            hh = HappyHour.objects.select_related("restaurant", "submitted_by", "deal").get(pk=pk)
             if request.user.is_employee_admin and hh.restaurant.registered_by_id != request.user.id:
+                if hh.submitted_by_id == request.user.id:
+                    return hh
                 return None
             return hh
         except HappyHour.DoesNotExist:
@@ -930,17 +1194,12 @@ class AdminHappyHourDetailView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        # Check if restaurant operating hours are set
+        # Check / set restaurant operating hours so admin is never blocked
         restaurant = happy_hour.restaurant
         operating_hours = restaurant.operating_hours
         if not operating_hours or not isinstance(operating_hours, dict) or not (operating_hours.get("open") or operating_hours.get("opening_time")) or not (operating_hours.get("close") or operating_hours.get("closing_time")):
-            return Response(
-                {
-                    "success": False,
-                    "message": f"Restaurant '{restaurant.name}' has not configured its operating hours yet. Happy hours cannot be updated for it."
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
+            restaurant.save(update_fields=["operating_hours"])
 
         serializer = AdminUpdateHappyHourSerializer(
             happy_hour,
@@ -949,7 +1208,34 @@ class AdminHappyHourDetailView(APIView):
         )
 
         if serializer.is_valid():
-            serializer.save()
+            updated_hh = serializer.save()
+
+            if updated_hh.deal:
+                deal = updated_hh.deal
+                update_deal_fields = []
+                if "title" in serializer.validated_data:
+                    deal.title = updated_hh.title
+                    update_deal_fields.append("title")
+                if "description" in serializer.validated_data:
+                    deal.description = updated_hh.description or ""
+                    update_deal_fields.append("description")
+                if "start_time" in serializer.validated_data and updated_hh.start_time:
+                    deal.start_time = updated_hh.start_time
+                    update_deal_fields.append("start_time")
+                if "end_time" in serializer.validated_data and updated_hh.end_time:
+                    deal.end_time = updated_hh.end_time
+                    update_deal_fields.append("end_time")
+                if "location" in serializer.validated_data:
+                    deal.location_branch = updated_hh.location
+                    update_deal_fields.append("location_branch")
+                if "discount_offer" in serializer.validated_data:
+                    deal.discount_percentage = updated_hh.discount_offer
+                    update_deal_fields.append("discount_percentage")
+                if "status" in serializer.validated_data:
+                    deal.status = updated_hh.status
+                    update_deal_fields.append("status")
+                if update_deal_fields:
+                    deal.save(update_fields=update_deal_fields)
 
             return Response({
                 "success": True,
@@ -1022,6 +1308,10 @@ class AdminAcceptHappyHourView(APIView):
         happy_hour.accepted_at = timezone.now()
         happy_hour.rejection_reason = ""
         happy_hour.save(update_fields=["status", "accepted_at", "rejection_reason"])
+
+        if happy_hour.is_deal and target_status == "active":
+            from deals.views import enforce_two_active_happy_hour_deals_rule
+            enforce_two_active_happy_hour_deals_rule(restaurant, happy_hour)
 
         # Notify creator user and award points
         if happy_hour.submitted_by:
@@ -1145,6 +1435,11 @@ class AdminAcceptAllHappyHoursView(APIView):
                 hh.accepted_at = timezone.now()
                 hh.rejection_reason = ""
                 hh.save(update_fields=["status", "accepted_at", "rejection_reason"])
+
+                if hh.is_deal and target_status == "active":
+                    from deals.views import enforce_two_active_happy_hour_deals_rule
+                    enforce_two_active_happy_hour_deals_rule(hh.restaurant, hh)
+
                 count += 1
 
                 if hh.submitted_by:

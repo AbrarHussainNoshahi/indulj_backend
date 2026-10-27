@@ -73,7 +73,12 @@ class Deal(models.Model):
     title = models.CharField(max_length=200)
     description = models.TextField()
 
-    price = models.DecimalField(max_digits=8, decimal_places=2)
+    price = models.DecimalField(
+        max_digits=8,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
 
     food_type = models.CharField(
         max_length=500,
@@ -86,6 +91,7 @@ class Deal(models.Model):
         choices=DAY_CHOICES,
         default="everyday",
     )
+    days_of_week = models.JSONField(default=list, blank=True)
 
     start_time = models.TimeField(null=True, blank=True)
     end_time = models.TimeField(null=True, blank=True)
