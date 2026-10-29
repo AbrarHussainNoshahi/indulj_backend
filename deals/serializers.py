@@ -2,6 +2,102 @@ from rest_framework import serializers
 from .models import Deal, SavedDeal
 
 
+def normalize_food_type_input(raw):
+    if not raw:
+        return "other"
+    if isinstance(raw, list):
+        items = [str(x).strip().replace("_", " ") for x in raw if str(x).strip()]
+        return ", ".join(items) if items else "other"
+    if isinstance(raw, str):
+        trimmed = raw.strip()
+        if trimmed.startswith("[") and trimmed.endswith("]"):
+            try:
+                import json
+                parsed = json.loads(trimmed)
+                if isinstance(parsed, list):
+                    items = [str(x).strip().replace("_", " ") for x in parsed if str(x).strip()]
+                    return ", ".join(items) if items else "other"
+            except Exception:
+                pass
+        return trimmed or "other"
+    return str(raw)
+
+
+def normalize_days_of_week_input(raw):
+    if not raw:
+        return []
+    import json
+    result = []
+    def _extract(val):
+        if not val:
+            return
+        if isinstance(val, (list, tuple)):
+            for item in val:
+                _extract(item)
+        elif isinstance(val, str):
+            trimmed = val.strip()
+            if trimmed.startswith("[") and trimmed.endswith("]"):
+                try:
+                    parsed = json.loads(trimmed)
+                    _extract(parsed)
+                    return
+                except Exception:
+                    pass
+            for part in trimmed.split(","):
+                cleaned = part.strip().strip('"').strip("'").lower()
+                if cleaned:
+                    result.append(cleaned)
+    _extract(raw)
+    valid_days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+    cleaned_result = []
+    for d in result:
+        if d in valid_days and d not in cleaned_result:
+            cleaned_result.append(d)
+        elif d in {"everyday", "daily", "all"}:
+            for vd in valid_days:
+                if vd not in cleaned_result:
+                    cleaned_result.append(vd)
+        elif d == "weekdays":
+            for vd in ["monday", "tuesday", "wednesday", "thursday", "friday"]:
+                if vd not in cleaned_result:
+                    cleaned_result.append(vd)
+        elif d == "weekends":
+            for vd in ["saturday", "sunday"]:
+                if vd not in cleaned_result:
+                    cleaned_result.append(vd)
+    return cleaned_result
+
+
+def compute_single_day_of_week(days_list):
+    if not days_list:
+        return "everyday"
+    if len(days_list) == 7:
+        return "everyday"
+    if len(days_list) == 5 and all(d in days_list for d in ["monday", "tuesday", "wednesday", "thursday", "friday"]):
+        return "weekdays"
+    if len(days_list) == 2 and all(d in days_list for d in ["saturday", "sunday"]):
+        return "weekends"
+    return days_list[0]
+
+
+class DaysOfWeekField(serializers.Field):
+    """
+    Custom serializer field that accepts days_of_week in any format
+    (JSON string, list, comma-separated string, or single string)
+    and avoids QueryDict list stringification issues.
+    """
+    def get_value(self, dictionary):
+        if self.field_name in dictionary:
+            return dictionary.get(self.field_name)
+        return serializers.empty
+
+    def to_internal_value(self, data):
+        return normalize_days_of_week_input(data)
+
+    def to_representation(self, value):
+        return normalize_days_of_week_input(value)
+
+
 # ─────────────────────────────────────────────
 # ADMIN CREATE DEAL
 # ─────────────────────────────────────────────
@@ -12,7 +108,7 @@ class AdminCreateDealSerializer(serializers.Serializer):
     price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
 
     food_type = serializers.CharField(required=False, allow_blank=True, default="other")
-    day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES)
+    day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES, required=False, default="everyday")
 
     has_time_slots = serializers.BooleanField(default=False)
     start_time = serializers.TimeField(required=False, allow_null=True)
@@ -38,8 +134,39 @@ class AdminCreateDealSerializer(serializers.Serializer):
     hh_event_type = serializers.CharField(required=False, default="casual")
     hh_vibe = serializers.CharField(required=False, default="casual")
     hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
-    days_of_week = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    days_of_week = DaysOfWeekField(required=False, default=list)
     hh_days_of_week = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
+        if raw_food is not None:
+            data["food_type"] = normalize_food_type_input(raw_food)
+        raw_days = data.get("days_of_week") or data.get("hh_days_of_week")
+        norm_days = normalize_days_of_week_input(raw_days)
+        if norm_days:
+            data["days_of_week"] = norm_days
+            data["day_of_week"] = compute_single_day_of_week(norm_days)
+        elif "day_of_week" in data:
+            day_norm = normalize_days_of_week_input(data["day_of_week"])
+            data["day_of_week"] = compute_single_day_of_week(day_norm)
+            data["days_of_week"] = day_norm or [data["day_of_week"]]
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        price = attrs.get("price")
+        discount = attrs.get("discount_percentage") or attrs.get("discount_offer") or attrs.get("hh_discount_offer")
+        if price is None and not str(discount or "").strip():
+            raise serializers.ValidationError({
+                "price": "Either a price or a discount offer must be provided."
+            })
+        return attrs
 
 
 # ─────────────────────────────────────────────
@@ -48,6 +175,8 @@ class AdminCreateDealSerializer(serializers.Serializer):
 class AdminUpdateDealSerializer(serializers.ModelSerializer):
     price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
     food_type = serializers.CharField(required=False, allow_blank=True, default="other")
+    day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES, required=False)
+    days_of_week = DaysOfWeekField(required=False)
 
     class Meta:
         model = Deal
@@ -56,7 +185,6 @@ class AdminUpdateDealSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "food_type",
-            "food_types",
             "day_of_week",
             "days_of_week",
             "start_time",
@@ -70,6 +198,38 @@ class AdminUpdateDealSerializer(serializers.ModelSerializer):
             "status",
             "rejection_reason",
         ]
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
+        if raw_food is not None:
+            data["food_type"] = normalize_food_type_input(raw_food)
+        if "image" in data and isinstance(data["image"], str):
+            data.pop("image", None)
+        raw_days = data.get("days_of_week") or data.get("hh_days_of_week")
+        if raw_days is not None:
+            norm_days = normalize_days_of_week_input(raw_days)
+            data["days_of_week"] = norm_days
+            data["day_of_week"] = compute_single_day_of_week(norm_days)
+        elif "day_of_week" in data:
+            day_norm = normalize_days_of_week_input(data["day_of_week"])
+            data["day_of_week"] = compute_single_day_of_week(day_norm)
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        price = attrs.get("price") if "price" in attrs else getattr(self.instance, "price", None)
+        discount = attrs.get("discount_percentage") if "discount_percentage" in attrs else getattr(self.instance, "discount_percentage", "")
+        if price is None and not str(discount or "").strip():
+            raise serializers.ValidationError({
+                "price": "Either a price or a discount offer must be provided."
+            })
+        return attrs
 
 
 # ─────────────────────────────────────────────
@@ -102,25 +262,24 @@ class DealListSerializer(serializers.ModelSerializer):
     duplicate_of_title = serializers.CharField(source="duplicate_of.title", read_only=True)
     duplicate_of = serializers.SerializerMethodField()
     days_of_week = serializers.SerializerMethodField()
+    discount_offer = serializers.CharField(source="discount_percentage", read_only=True)
 
     def get_days_of_week(self, obj):
         raw = getattr(obj, "days_of_week", None)
-        if raw and isinstance(raw, list) and len(raw) > 0:
-            return [str(d).lower().strip() for d in raw]
+        cleaned = normalize_days_of_week_input(raw)
+        if cleaned:
+            return cleaned
         linked_hh = getattr(obj, "linked_happy_hours", None)
         if linked_hh:
             first_hh = linked_hh.first()
             if first_hh and first_hh.days_of_week:
-                return [str(d).lower().strip() for d in first_hh.days_of_week]
+                hh_clean = normalize_days_of_week_input(first_hh.days_of_week)
+                if hh_clean:
+                    return hh_clean
         day = (obj.day_of_week or "").lower().strip()
-        if day in ("everyday", "all", "daily"):
-            return ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
-        elif day == "weekdays":
-            return ["monday", "tuesday", "wednesday", "thursday", "friday"]
-        elif day == "weekends":
-            return ["saturday", "sunday"]
-        elif day:
-            return [day]
+        cleaned_day = normalize_days_of_week_input(day)
+        if cleaned_day:
+            return cleaned_day
         return ["everyday"]
 
     def get_restaurant_is_registered(self, obj):
@@ -135,6 +294,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "title": d.title,
             "price": str(d.price) if d.price is not None else None,
             "discount_percentage": d.discount_percentage,
+            "discount_offer": d.discount_percentage,
             "day_of_week": d.day_of_week,
             "status": d.status,
             "created_at": d.created_at,
@@ -160,6 +320,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "status",
             "rejection_reason",
             "discount_percentage",
+            "discount_offer",
             "image_url",
             "views_count",
             "redemptions_count",
@@ -278,8 +439,39 @@ class SubmitDealSerializer(serializers.Serializer):
     hh_event_type = serializers.CharField(required=False, allow_blank=True, default="casual")
     hh_vibe = serializers.CharField(required=False, allow_blank=True, default="casual")
     hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
-    days_of_week = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    days_of_week = DaysOfWeekField(required=False, default=list)
     hh_days_of_week = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
+        if raw_food is not None:
+            data["food_type"] = normalize_food_type_input(raw_food)
+        raw_days = data.get("days_of_week") or data.get("hh_days_of_week")
+        norm_days = normalize_days_of_week_input(raw_days)
+        if norm_days:
+            data["days_of_week"] = norm_days
+            data["day_of_week"] = compute_single_day_of_week(norm_days)
+        elif "day_of_week" in data:
+            day_norm = normalize_days_of_week_input(data["day_of_week"])
+            data["day_of_week"] = compute_single_day_of_week(day_norm)
+            data["days_of_week"] = day_norm or [data["day_of_week"]]
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        price = attrs.get("price")
+        discount = attrs.get("discount_percentage") or attrs.get("discount_offer") or attrs.get("hh_discount_offer")
+        if price is None and not str(discount or "").strip():
+            raise serializers.ValidationError({
+                "price": "Either a price or a discount offer must be provided."
+            })
+        return attrs
 
 
 # ─────────────────────────────────────────────
@@ -288,6 +480,9 @@ class SubmitDealSerializer(serializers.Serializer):
 class CreateDealSerializer(serializers.ModelSerializer):
     price = serializers.DecimalField(max_digits=8, decimal_places=2, required=False, allow_null=True)
     food_type = serializers.CharField(required=False, allow_blank=True, default="other")
+    day_of_week = serializers.ChoiceField(choices=Deal.DAY_CHOICES, required=False)
+    days_of_week = DaysOfWeekField(required=False)
+
     class Meta:
         model = Deal
         fields = [
@@ -295,7 +490,6 @@ class CreateDealSerializer(serializers.ModelSerializer):
             "description",
             "price",
             "food_type",
-            "food_types",
             "day_of_week",
             "days_of_week",
             "start_time",
@@ -307,6 +501,38 @@ class CreateDealSerializer(serializers.ModelSerializer):
             "is_hot_deal",
             "expires_at",
         ]
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
+        if raw_food is not None:
+            data["food_type"] = normalize_food_type_input(raw_food)
+        if "image" in data and isinstance(data["image"], str):
+            data.pop("image", None)
+        raw_days = data.get("days_of_week") or data.get("hh_days_of_week")
+        if raw_days is not None:
+            norm_days = normalize_days_of_week_input(raw_days)
+            data["days_of_week"] = norm_days
+            data["day_of_week"] = compute_single_day_of_week(norm_days)
+        elif "day_of_week" in data:
+            day_norm = normalize_days_of_week_input(data["day_of_week"])
+            data["day_of_week"] = compute_single_day_of_week(day_norm)
+        return super().to_internal_value(data)
+
+    def validate(self, attrs):
+        price = attrs.get("price") if "price" in attrs else getattr(self.instance, "price", None)
+        discount = attrs.get("discount_percentage") if "discount_percentage" in attrs else getattr(self.instance, "discount_percentage", "")
+        if price is None and not str(discount or "").strip():
+            raise serializers.ValidationError({
+                "price": "Either a price or a discount offer must be provided."
+            })
+        return attrs
 
 
 # ─────────────────────────────────────────────

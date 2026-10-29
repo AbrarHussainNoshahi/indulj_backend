@@ -39,6 +39,9 @@ from .serializers import (
     SavedDealSerializer,
     AdminCreateDealSerializer,
     AdminUpdateDealSerializer,
+    normalize_food_type_input,
+    normalize_days_of_week_input,
+    compute_single_day_of_week,
 )
 
 from django.utils import timezone
@@ -428,17 +431,8 @@ class SubmitDealView(APIView):
             restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
             restaurant.save(update_fields=["operating_hours"])
 
-        raw_days = data.get("days_of_week") or request.data.get("days_of_week")
-        if raw_days:
-            if isinstance(raw_days, str):
-                import json
-                try:
-                    raw_days = json.loads(raw_days)
-                except Exception:
-                    raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
-            days_of_week_val = [str(d).lower().strip() for d in raw_days if str(d).strip()] if isinstance(raw_days, list) else [str(raw_days).lower()]
-        else:
-            days_of_week_val = [data.get("day_of_week")] if data.get("day_of_week") else ["everyday"]
+        days_of_week_val = data.get("days_of_week") or normalize_days_of_week_input(request.data.get("days_of_week") or request.data.get("hh_days_of_week")) or ["everyday"]
+        day_of_week_val = data.get("day_of_week") or compute_single_day_of_week(days_of_week_val)
 
         deal = Deal.objects.create(
             restaurant=restaurant,
@@ -447,8 +441,10 @@ class SubmitDealView(APIView):
             title=data.get("title") or f"{restaurant.name} Deal",
             description=data.get("description"),
             price=data.get("price"),
-            food_type=normalize_food_type_input(request.data.get("food_type") or data.get("food_type")),
-            day_of_week=data.get("day_of_week"),
+            food_type=normalize_food_type_input(
+                request.data.get("food_type") or data.get("food_type") or request.data.get("food_types") or data.get("food_types")
+            ),
+            day_of_week=day_of_week_val,
             days_of_week=days_of_week_val,
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
@@ -703,16 +699,21 @@ class RestaurantCreateDealView(APIView):
             req_data['price'] = None
         if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
             req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
-        if 'food_type' in req_data:
-            req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
-        if 'days_of_week' in req_data:
-            raw_d = req_data.get('days_of_week')
-            if isinstance(raw_d, str):
-                import json
-                try:
-                    req_data['days_of_week'] = json.loads(raw_d)
-                except Exception:
-                    req_data['days_of_week'] = [x.strip().lower() for x in raw_d.split(',') if x.strip()]
+        raw_food = req_data.get('food_type') if 'food_type' in req_data else req_data.get('food_types')
+        if raw_food is not None:
+            req_data['food_type'] = normalize_food_type_input(raw_food)
+        req_data.pop('food_types', None)
+        raw_days = req_data.get('days_of_week') or req_data.get('hh_days_of_week')
+        if raw_days is not None:
+            norm_days = normalize_days_of_week_input(raw_days)
+            req_data['days_of_week'] = norm_days
+            req_data['day_of_week'] = compute_single_day_of_week(norm_days)
+        elif 'day_of_week' in req_data:
+            day_norm = normalize_days_of_week_input(req_data['day_of_week'])
+            req_data['day_of_week'] = compute_single_day_of_week(day_norm)
+            req_data['days_of_week'] = day_norm or [req_data['day_of_week']]
+        if 'image' in req_data and isinstance(req_data['image'], str):
+            del req_data['image']
         serializer = CreateDealSerializer(data=req_data)
 
         if not serializer.is_valid():
@@ -785,21 +786,32 @@ class RestaurantUpdateDeleteDealView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if hasattr(request.data, "dict"):
+            req_data = request.data.dict()
+        elif hasattr(request.data, "copy"):
+            req_data = request.data.copy()
+        else:
+            req_data = dict(request.data)
+
         if req_data.get('price') in ['', 'null', 'None']:
             req_data['price'] = None
         if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
             req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
-        if 'food_type' in req_data:
-            req_data['food_type'] = normalize_food_type_input(req_data['food_type'])
-        if 'days_of_week' in req_data:
-            raw_d = req_data.get('days_of_week')
-            if isinstance(raw_d, str):
-                import json
-                try:
-                    req_data['days_of_week'] = json.loads(raw_d)
-                except Exception:
-                    req_data['days_of_week'] = [x.strip().lower() for x in raw_d.split(',') if x.strip()]
+        raw_food = req_data.get('food_type') if 'food_type' in req_data else req_data.get('food_types')
+        if raw_food is not None:
+            req_data['food_type'] = normalize_food_type_input(raw_food)
+        req_data.pop('food_types', None)
+        raw_days = req_data.get('days_of_week') or req_data.get('hh_days_of_week')
+        if raw_days is not None:
+            norm_days = normalize_days_of_week_input(raw_days)
+            req_data['days_of_week'] = norm_days
+            req_data['day_of_week'] = compute_single_day_of_week(norm_days)
+        elif 'day_of_week' in req_data:
+            day_norm = normalize_days_of_week_input(req_data['day_of_week'])
+            req_data['day_of_week'] = compute_single_day_of_week(day_norm)
+            req_data['days_of_week'] = day_norm or [req_data['day_of_week']]
+        if 'image' in req_data and isinstance(req_data['image'], str):
+            del req_data['image']
         serializer = CreateDealSerializer(deal, data=req_data, partial=True)
 
         if serializer.is_valid():
@@ -944,7 +956,13 @@ class AdminCreateDealView(APIView):
     parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
-        req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
+        if hasattr(request.data, "dict"):
+            req_data = request.data.dict()
+        elif hasattr(request.data, "copy"):
+            req_data = request.data.copy()
+        else:
+            req_data = dict(request.data)
+
         if req_data.get('price') in ['', 'null', 'None']:
             req_data['price'] = None
         if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
@@ -1000,17 +1018,8 @@ class AdminCreateDealView(APIView):
             restaurant.operating_hours = {"open": "09:00", "close": "23:00"}
             restaurant.save(update_fields=["operating_hours"])
 
-        raw_days = data.get("days_of_week") or request.data.get("days_of_week")
-        if raw_days:
-            if isinstance(raw_days, str):
-                import json
-                try:
-                    raw_days = json.loads(raw_days)
-                except Exception:
-                    raw_days = [d.strip().lower() for d in raw_days.split(",") if d.strip()]
-            days_of_week_val = [str(d).lower().strip() for d in raw_days if str(d).strip()] if isinstance(raw_days, list) else [str(raw_days).lower()]
-        else:
-            days_of_week_val = [data.get("day_of_week")] if data.get("day_of_week") else ["everyday"]
+        days_of_week_val = data.get("days_of_week") or normalize_days_of_week_input(request.data.get("days_of_week") or request.data.get("hh_days_of_week")) or ["everyday"]
+        day_of_week_val = data.get("day_of_week") or compute_single_day_of_week(days_of_week_val)
 
         deal = Deal.objects.create(
             restaurant=restaurant,
@@ -1019,8 +1028,10 @@ class AdminCreateDealView(APIView):
             title=data["title"],
             description=data["description"],
             price=data.get("price"),
-            food_type=normalize_food_type_input(request.data.get("food_type") or data.get("food_type")),
-            day_of_week=data["day_of_week"],
+            food_type=normalize_food_type_input(
+                request.data.get("food_type") or data.get("food_type") or request.data.get("food_types") or data.get("food_types")
+            ),
+            day_of_week=day_of_week_val,
             days_of_week=days_of_week_val,
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
@@ -1124,21 +1135,32 @@ class AdminUpdateDealView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        req_data = request.data.copy() if hasattr(request.data, "copy") else dict(request.data)
+        if hasattr(request.data, "dict"):
+            req_data = request.data.dict()
+        elif hasattr(request.data, "copy"):
+            req_data = request.data.copy()
+        else:
+            req_data = dict(request.data)
+
         if req_data.get("price") in ["", "null", "None"]:
             req_data["price"] = None
         if not req_data.get("discount_percentage") and (req_data.get("discount_offer") or req_data.get("hh_discount_offer")):
             req_data["discount_percentage"] = req_data.get("discount_offer") or req_data.get("hh_discount_offer")
-        if "food_type" in req_data:
-            req_data["food_type"] = normalize_food_type_input(req_data["food_type"])
-        if "days_of_week" in req_data:
-            raw_d = req_data.get("days_of_week")
-            if isinstance(raw_d, str):
-                import json
-                try:
-                    req_data["days_of_week"] = json.loads(raw_d)
-                except Exception:
-                    req_data["days_of_week"] = [x.strip().lower() for x in raw_d.split(",") if x.strip()]
+        raw_food = req_data.get("food_type") if "food_type" in req_data else req_data.get("food_types")
+        if raw_food is not None:
+            req_data["food_type"] = normalize_food_type_input(raw_food)
+        req_data.pop("food_types", None)
+        raw_days = req_data.get("days_of_week") or req_data.get("hh_days_of_week")
+        if raw_days is not None:
+            norm_days = normalize_days_of_week_input(raw_days)
+            req_data["days_of_week"] = norm_days
+            req_data["day_of_week"] = compute_single_day_of_week(norm_days)
+        elif "day_of_week" in req_data:
+            day_norm = normalize_days_of_week_input(req_data["day_of_week"])
+            req_data["day_of_week"] = compute_single_day_of_week(day_norm)
+            req_data["days_of_week"] = day_norm or [req_data["day_of_week"]]
+        if "image" in req_data and isinstance(req_data["image"], str):
+            del req_data["image"]
 
         serializer = AdminUpdateDealSerializer(deal, data=req_data, partial=True)
         if not serializer.is_valid():
