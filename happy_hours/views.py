@@ -1,3 +1,4 @@
+import datetime
 from django.utils import timezone
 from django.db.models import Q
 from rest_framework import status
@@ -28,6 +29,23 @@ from .serializers import (
 )
 from deals.image_enhancer import enhance_uploaded_image
 from deals.duplicate_detector import detect_happy_hour_duplicates
+
+
+def parse_time_value(val, default_time=None):
+    if not val:
+        return default_time
+    if isinstance(val, datetime.time):
+        return val
+    s = str(val).strip()
+    for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p"):
+        try:
+            return datetime.datetime.strptime(s, fmt).time()
+        except ValueError:
+            pass
+    try:
+        return datetime.datetime.strptime(s[:5], "%H:%M").time()
+    except Exception:
+        return default_time
 
 
 class PublicHappyHourListView(APIView):
@@ -203,13 +221,16 @@ class PlanHappyHourView(APIView):
 
         lat = data.get("latitude")
         lng = data.get("longitude")
-        city_val = data.get("city") or (location_input.split(",")[-2].strip() if "," in location_input else location_input) or "Houston"
+        raw_city = data.get("city") or (location_input.split(",")[-2].strip() if "," in location_input else location_input) or "Houston"
+        city_val = str(raw_city)[:250]
+        address_val = (location_input or "")[:950]
+        rest_name_val = (str(rest_input) if rest_input else "Partner Restaurant")[:250]
 
         if not restaurant and (rest_input or location_input):
             restaurant = Restaurant.objects.create(
-                name=str(rest_input) if rest_input else "Partner Restaurant",
+                name=rest_name_val,
                 city=city_val,
-                address=location_input or "",
+                address=address_val,
                 latitude=lat,
                 longitude=lng,
                 status="active",
@@ -232,9 +253,11 @@ class PlanHappyHourView(APIView):
             restaurant.save(update_fields=["operating_hours"])
 
         date_val = data.get("date") or timezone.localdate()
-        title_val = data.get("title") or f"{restaurant.name} Happy Hour"
-        start_time_val = data.get("start_time") or "17:00:00"
-        end_time_val = data.get("end_time") or "20:00:00"
+        title_val = (data.get("title") or f"{restaurant.name} Happy Hour")[:250]
+        op_open = operating_hours.get("open") or operating_hours.get("opening_time") if isinstance(operating_hours, dict) else None
+        op_close = operating_hours.get("close") or operating_hours.get("closing_time") if isinstance(operating_hours, dict) else None
+        start_time_val = parse_time_value(data.get("start_time")) or parse_time_value(op_open) or datetime.time(17, 0)
+        end_time_val = parse_time_value(data.get("end_time")) or parse_time_value(op_close) or datetime.time(20, 0)
 
         raw_image = data.get("image")
         enhanced_image = enhance_uploaded_image(raw_image) if raw_image else None
@@ -251,13 +274,14 @@ class PlanHappyHourView(APIView):
             end_time=end_time_val,
             date=date_val,
             vibe=data.get("vibe", "casual"),
-            location=data.get("location", ""),
-            phone_number=data.get("phone_number", ""),
+            location=(data.get("location") or "")[:490],
+            phone_number=(data.get("phone_number") or "")[:50],
             is_public=data.get("is_public", True),
             image=enhanced_image,
             specials=data.get("specials", []),
             status="pending",
         )
+        happy_hour.refresh_from_db()
 
         # AI Duplicate detection
         try:
@@ -324,12 +348,6 @@ class PlanHappyHourView(APIView):
                     related_deal=deal,
                 )
 
-                # Send deal email notification
-                try:
-                    send_deal_planned_email(deal)
-                except Exception as de_err:
-                    import logging
-                    logging.getLogger(__name__).error(f"Failed to send deal email: {de_err}")
 
             except Exception as e:
                 import logging
@@ -537,7 +555,7 @@ class RestaurantCreateHappyHourView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Check Free tier 10 submissions limit
+        # Check Free tier 5 submissions limit
         is_premium = (restaurant.subscription_plan or "").lower() == "premium"
         if not is_premium:
             from deals.models import Deal
@@ -545,11 +563,11 @@ class RestaurantCreateHappyHourView(APIView):
                 Deal.objects.filter(restaurant=restaurant).count()
                 + HappyHour.objects.filter(restaurant=restaurant, deal__isnull=True).count()
             )
-            if total_submissions >= 10:
+            if total_submissions >= 5:
                 return Response(
                     {
                         "success": False,
-                        "message": "Free tier limit reached (10 deals & happy hours). Please upgrade to the Premium Plan ($99/mo) for unlimited submissions.",
+                        "message": "Free tier limit reached (5 deals & happy hours). Please upgrade to the Premium Plan ($99/mo) for unlimited submissions.",
                         "limit_reached": True,
                     },
                     status=status.HTTP_403_FORBIDDEN,
@@ -911,13 +929,16 @@ class AdminPlanHappyHourView(APIView):
 
         lat = data.get("latitude") or request.data.get("latitude")
         lng = data.get("longitude") or request.data.get("longitude")
-        city_val = data.get("city") or request.data.get("city") or (location_input.split(",")[-2].strip() if "," in location_input else location_input) or "Houston"
+        raw_city = data.get("city") or request.data.get("city") or (location_input.split(",")[-2].strip() if "," in location_input else location_input) or "Houston"
+        city_val = str(raw_city)[:250]
+        address_val = (location_input or "")[:950]
+        rest_name_val = (str(rest_input) if rest_input else "Partner Restaurant")[:250]
 
         if not restaurant and (rest_input or location_input):
             restaurant = Restaurant.objects.create(
-                name=str(rest_input) if rest_input else "Partner Restaurant",
+                name=rest_name_val,
                 city=city_val,
-                address=location_input or "",
+                address=address_val,
                 latitude=lat,
                 longitude=lng,
                 status="active",
@@ -957,14 +978,16 @@ class AdminPlanHappyHourView(APIView):
             status_val = "active"
 
         date_val = data.get("date") or timezone.localdate()
-        title_val = data.get("title") or f"{restaurant.name} Happy Hour"
-        start_time_val = data.get("start_time") or "17:00:00"
-        end_time_val = data.get("end_time") or "20:00:00"
+        title_val = (data.get("title") or f"{restaurant.name} Happy Hour")[:250]
+        op_open = operating_hours.get("open") or operating_hours.get("opening_time") if isinstance(operating_hours, dict) else None
+        op_close = operating_hours.get("close") or operating_hours.get("closing_time") if isinstance(operating_hours, dict) else None
+        start_time_val = parse_time_value(data.get("start_time")) or parse_time_value(op_open) or datetime.time(17, 0)
+        end_time_val = parse_time_value(data.get("end_time")) or parse_time_value(op_close) or datetime.time(20, 0)
 
         raw_image = data.get("image") or request.data.get("image")
         enhanced_image = enhance_uploaded_image(raw_image) if raw_image else None
 
-        raw_discount = request.data.get("discount_offer") or data.get("discount_offer") or ""
+        raw_discount = (request.data.get("discount_offer") or data.get("discount_offer") or "")[:250]
         is_deal_val = request.data.get("is_deal") in [True, "true", "True", "1", 1] or bool(request.data.get("is_happy_hour_deal"))
 
         raw_days = request.data.get("days_of_week") or data.get("days_of_week") or []
@@ -991,8 +1014,8 @@ class AdminPlanHappyHourView(APIView):
             date=date_val,
             days_of_week=hh_days_of_week,
             vibe=data.get("vibe", "casual"),
-            location=data.get("location") or restaurant.address or restaurant.city or "",
-            phone_number=data.get("phone_number", ""),
+            location=(data.get("location") or restaurant.address or restaurant.city or "")[:490],
+            phone_number=(data.get("phone_number") or "")[:50],
             is_public=data.get("is_public", True),
             image=enhanced_image,
             specials=data.get("specials", []),
@@ -1000,6 +1023,7 @@ class AdminPlanHappyHourView(APIView):
             is_deal=is_deal_val,
             status=status_val,
         )
+        happy_hour.refresh_from_db()
 
         # Enforce: "Each restaurant can have at most 2 active Happy Hour Deals on any given day"
         if is_deal_val and status_val == "active":

@@ -1402,12 +1402,12 @@ class UserAnalyticsSummaryView(APIView):
                             "title": saved.deal.title,
                             "restaurant_name": saved.deal.restaurant.name,
                             "price": float(saved.deal.price or 0),
-                            "created_at": saved.created_at,
+                            "created_at": saved.saved_at,
                         }
                         for saved in saved_deals.select_related(
                             "deal",
                             "deal__restaurant",
-                        ).order_by("-created_at")[:5]
+                        ).order_by("-saved_at")[:5]
                         if saved.deal
                     ],
                 },

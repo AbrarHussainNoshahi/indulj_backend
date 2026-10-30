@@ -1680,7 +1680,7 @@ class MyReviewsView(APIView):
     def get(self, request):
         qs = (
             Review.objects.filter(user=request.user)
-            .select_related("restaurant", "deal", "user")
+            .select_related("restaurant", "user")
             .order_by("-created_at")
         )
 
@@ -1694,7 +1694,6 @@ class MyReviewsView(APIView):
             qs = qs.filter(
                 Q(comment__icontains=search)
                 | Q(restaurant__name__icontains=search)
-                | Q(deal__title__icontains=search)
             )
 
         page_qs, meta = paginate_qs(qs, request)

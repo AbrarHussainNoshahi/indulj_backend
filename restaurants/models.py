@@ -39,7 +39,7 @@ class Restaurant(models.Model):
         help_text="Admin/Employee who registered this restaurant",
     )
 
-    name = models.CharField(max_length=200)
+    name = models.CharField(max_length=255)
     description = models.TextField(blank=True)
 
     logo = models.ImageField(
@@ -48,8 +48,8 @@ class Restaurant(models.Model):
         blank=True,
     )
 
-    address = models.CharField(max_length=500)
-    city = models.CharField(max_length=100, blank=True)
+    address = models.CharField(max_length=1000, blank=True, default="")
+    city = models.CharField(max_length=255, blank=True)
 
     latitude = models.DecimalField(
         max_digits=9,
@@ -65,7 +65,7 @@ class Restaurant(models.Model):
         blank=True,
     )
 
-    phone = models.CharField(max_length=20, blank=True)
+    phone = models.CharField(max_length=50, blank=True)
     email = models.EmailField(blank=True)
     raw_password = models.CharField(max_length=255, blank=True, default="")
 

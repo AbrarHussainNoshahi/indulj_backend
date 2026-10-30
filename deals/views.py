@@ -208,7 +208,7 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
         restaurant=restaurant,
         submitted_by=user,
         created_by_role=role,
-        title=deal.title,
+        title=(deal.title or "Happy Hour Deal")[:250],
         description=deal.description or "",
         group_size=int(data.get("hh_group_size") or 1),
         event_type=hh_event,
@@ -217,8 +217,8 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
         start_time=s_time,
         end_time=e_time,
         days_of_week=hh_days_of_week,
-        location=data.get("location_branch") or getattr(deal, "location_branch", "") or restaurant.address or restaurant.city or "",
-        discount_offer=hh_discount,
+        location=(data.get("location_branch") or getattr(deal, "location_branch", "") or restaurant.address or restaurant.city or "")[:490],
+        discount_offer=(hh_discount or "")[:250],
         status=status_val,
         is_public=True,
         image=happy_hour_image,
@@ -399,9 +399,16 @@ class SubmitDealView(APIView):
 
     def post(self, request):
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
-        if req_data.get('price') in ['', 'null', 'None']:
+        raw_post_hh = req_data.get("post_to_happy_hour")
+        is_hh_deal = (raw_post_hh in [True, "true", "True", "1", 1]) or bool(req_data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1])
+        if is_hh_deal:
             req_data['price'] = None
-        serializer = SubmitDealSerializer(data=req_data)
+            req_data['discount_percentage'] = ''
+            req_data['discount_offer'] = ''
+            req_data['hh_discount_offer'] = ''
+        elif req_data.get('price') in ['', 'null', 'None']:
+            req_data['price'] = None
+        serializer = SubmitDealSerializer(data=req_data, context={"request": request, "is_happy_hour_deal": is_hh_deal})
 
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -416,11 +423,26 @@ class SubmitDealView(APIView):
             if not restaurant:
                 restaurant = Restaurant.objects.filter(name__icontains=restaurant_name, status="active").first()
 
+        loc = (data.get("location_branch") or request.data.get("location_branch") or "").strip()
+        raw_city = (data.get("city") or request.data.get("city") or "").strip()
+
+        # If city is not explicitly provided, extract candidate from location_branch
+        if not raw_city and loc:
+            parts = [p.strip() for p in loc.split(",") if p.strip()]
+            if len(parts) >= 2:
+                raw_city = parts[-2] if len(parts) > 2 else parts[-1]
+            else:
+                raw_city = parts[0]
+
+        city_val = (raw_city or "New York")[:250]
+        address_val = (loc or city_val)[:950]
+        rest_name_val = (restaurant_name or "Partner Restaurant")[:250]
+
         if not restaurant:
             restaurant = Restaurant.objects.create(
-                name=restaurant_name or "Partner Restaurant",
-                city=data.get("location_branch") or "New York",
-                address=data.get("location_branch") or "",
+                name=rest_name_val,
+                city=city_val,
+                address=address_val,
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
@@ -438,9 +460,9 @@ class SubmitDealView(APIView):
             restaurant=restaurant,
             submitted_by=request.user,
             created_by_role="user",
-            title=data.get("title") or f"{restaurant.name} Deal",
+            title=(data.get("title") or f"{restaurant.name} Deal")[:250],
             description=data.get("description"),
-            price=data.get("price"),
+            price=None if is_hh_deal else data.get("price"),
             food_type=normalize_food_type_input(
                 request.data.get("food_type") or data.get("food_type") or request.data.get("food_types") or data.get("food_types")
             ),
@@ -449,15 +471,15 @@ class SubmitDealView(APIView):
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
             end_time=data.get("end_time"),
-            location_branch=data.get("location_branch", ""),
-            discount_percentage=(
+            location_branch=(data.get("location_branch") or "")[:490],
+            discount_percentage="" if is_hh_deal else (
                 data.get("discount_percentage")
                 or data.get("discount_offer")
                 or request.data.get("discount_percentage")
                 or request.data.get("discount_offer")
                 or request.data.get("hh_discount_offer")
                 or ""
-            ),
+            )[:95],
             image=data.get("image"),
             status="pending",
         )
@@ -482,7 +504,7 @@ class SubmitDealView(APIView):
             logging.getLogger(__name__).warning(f"Duplicate detection check failed: {e}")
 
         raw_post_hh = request.data.get("post_to_happy_hour")
-        post_to_hh = data.get("post_to_happy_hour") or (raw_post_hh in [True, "true", "True", "1", 1])
+        post_to_hh = is_hh_deal or data.get("post_to_happy_hour") or (raw_post_hh in [True, "true", "True", "1", 1])
         if post_to_hh:
             create_linked_happy_hour_from_deal(
                 deal=deal,
@@ -515,11 +537,6 @@ class SubmitDealView(APIView):
                 related_deal=deal,
             )
 
-        try:
-            send_deal_planned_email(deal)
-        except Exception as err:
-            import logging
-            logging.getLogger(__name__).error(f"Failed to dispatch deal email: {err}")
 
         response_serializer = DealDetailSerializer(
             deal,
@@ -694,11 +711,37 @@ class RestaurantCreateDealView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Check Free tier 5 submissions limit
+        is_premium = (restaurant.subscription_plan or "").lower() == "premium"
+        if not is_premium:
+            from happy_hours.models import HappyHour
+            total_submissions = (
+                Deal.objects.filter(restaurant=restaurant).count()
+                + HappyHour.objects.filter(restaurant=restaurant, deal__isnull=True).count()
+            )
+            if total_submissions >= 5:
+                return Response(
+                    {
+                        "success": False,
+                        "message": "Free tier limit reached (5 deals & happy hours). Please upgrade to the Premium Plan ($99/mo) for unlimited submissions.",
+                        "limit_reached": True,
+                    },
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
         req_data = request.data.copy() if hasattr(request.data, 'copy') else dict(request.data)
-        if req_data.get('price') in ['', 'null', 'None']:
+        raw_post_hh = req_data.get("post_to_happy_hour")
+        is_hh_deal = (raw_post_hh in [True, "true", "True", "1", 1]) or bool(req_data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1])
+        if is_hh_deal:
             req_data['price'] = None
-        if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
-            req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
+            req_data['discount_percentage'] = ''
+            req_data['discount_offer'] = ''
+            req_data['hh_discount_offer'] = ''
+        else:
+            if req_data.get('price') in ['', 'null', 'None']:
+                req_data['price'] = None
+            if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
+                req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
         raw_food = req_data.get('food_type') if 'food_type' in req_data else req_data.get('food_types')
         if raw_food is not None:
             req_data['food_type'] = normalize_food_type_input(raw_food)
@@ -714,7 +757,7 @@ class RestaurantCreateDealView(APIView):
             req_data['days_of_week'] = day_norm or [req_data['day_of_week']]
         if 'image' in req_data and isinstance(req_data['image'], str):
             del req_data['image']
-        serializer = CreateDealSerializer(data=req_data)
+        serializer = CreateDealSerializer(data=req_data, context={"request": request, "is_happy_hour_deal": is_hh_deal})
 
         if not serializer.is_valid():
             return Response(
@@ -730,7 +773,7 @@ class RestaurantCreateDealView(APIView):
         )
 
         raw_post_hh = request.data.get("post_to_happy_hour")
-        if raw_post_hh in [True, "true", "True", "1", 1]:
+        if is_hh_deal or raw_post_hh in [True, "true", "True", "1", 1]:
             create_linked_happy_hour_from_deal(
                 deal=deal,
                 restaurant=restaurant,
@@ -793,10 +836,22 @@ class RestaurantUpdateDeleteDealView(APIView):
         else:
             req_data = dict(request.data)
 
-        if req_data.get('price') in ['', 'null', 'None']:
+        raw_post_hh = req_data.get("post_to_happy_hour")
+        is_hh_deal = (
+            raw_post_hh in [True, "true", "True", "1", 1]
+            or bool(req_data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1])
+            or deal.linked_happy_hours.exists()
+        )
+        if is_hh_deal:
             req_data['price'] = None
-        if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
-            req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
+            req_data['discount_percentage'] = ''
+            req_data['discount_offer'] = ''
+            req_data['hh_discount_offer'] = ''
+        else:
+            if req_data.get('price') in ['', 'null', 'None']:
+                req_data['price'] = None
+            if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
+                req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
         raw_food = req_data.get('food_type') if 'food_type' in req_data else req_data.get('food_types')
         if raw_food is not None:
             req_data['food_type'] = normalize_food_type_input(raw_food)
@@ -812,7 +867,7 @@ class RestaurantUpdateDeleteDealView(APIView):
             req_data['days_of_week'] = day_norm or [req_data['day_of_week']]
         if 'image' in req_data and isinstance(req_data['image'], str):
             del req_data['image']
-        serializer = CreateDealSerializer(deal, data=req_data, partial=True)
+        serializer = CreateDealSerializer(deal, data=req_data, partial=True, context={"request": request, "is_happy_hour_deal": is_hh_deal})
 
         if serializer.is_valid():
             new_status = deal.status if deal.status in ["active", "draft", "cancelled"] else "active"
@@ -963,11 +1018,19 @@ class AdminCreateDealView(APIView):
         else:
             req_data = dict(request.data)
 
-        if req_data.get('price') in ['', 'null', 'None']:
+        raw_post_hh = req_data.get("post_to_happy_hour")
+        is_hh_deal = (raw_post_hh in [True, "true", "True", "1", 1]) or bool(req_data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1])
+        if is_hh_deal:
             req_data['price'] = None
-        if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
-            req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
-        serializer = AdminCreateDealSerializer(data=req_data)
+            req_data['discount_percentage'] = ''
+            req_data['discount_offer'] = ''
+            req_data['hh_discount_offer'] = ''
+        else:
+            if req_data.get('price') in ['', 'null', 'None']:
+                req_data['price'] = None
+            if not req_data.get('discount_percentage') and (req_data.get('discount_offer') or req_data.get('hh_discount_offer')):
+                req_data['discount_percentage'] = req_data.get('discount_offer') or req_data.get('hh_discount_offer')
+        serializer = AdminCreateDealSerializer(data=req_data, context={"request": request, "is_happy_hour_deal": is_hh_deal})
 
         if not serializer.is_valid():
             return Response(
@@ -1000,11 +1063,26 @@ class AdminCreateDealView(APIView):
         elif request.user.is_super_admin:
             deal_status = "active"
 
+        loc = (data.get("location_branch") or request.data.get("location_branch") or "").strip()
+        raw_city = (data.get("city") or request.data.get("city") or "").strip()
+
+        # If city is not explicitly provided, extract candidate from location_branch
+        if not raw_city and loc:
+            parts = [p.strip() for p in loc.split(",") if p.strip()]
+            if len(parts) >= 2:
+                raw_city = parts[-2] if len(parts) > 2 else parts[-1]
+            else:
+                raw_city = parts[0]
+
+        city_val = (raw_city or "New York")[:250]
+        address_val = (loc or city_val)[:950]
+        rest_name_val = (restaurant_name or "Partner Restaurant")[:250]
+
         if not restaurant:
             restaurant = Restaurant.objects.create(
-                name=restaurant_name,
-                city=data.get("location_branch") or "New York",
-                address=data.get("location_branch") or "",
+                name=rest_name_val,
+                city=city_val,
+                address=address_val,
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"},
                 registered_by=request.user if request.user.is_employee_admin else None
@@ -1025,9 +1103,9 @@ class AdminCreateDealView(APIView):
             restaurant=restaurant,
             submitted_by=request.user,
             created_by_role="admin",
-            title=data["title"],
-            description=data["description"],
-            price=data.get("price"),
+            title=(data.get("title") or f"{restaurant.name} Deal")[:250],
+            description=data.get("description"),
+            price=None if is_hh_deal else data.get("price"),
             food_type=normalize_food_type_input(
                 request.data.get("food_type") or data.get("food_type") or request.data.get("food_types") or data.get("food_types")
             ),
@@ -1036,21 +1114,21 @@ class AdminCreateDealView(APIView):
             has_time_slots=data.get("has_time_slots", False),
             start_time=data.get("start_time"),
             end_time=data.get("end_time"),
-            location_branch=data.get("location_branch", ""),
-            discount_percentage=(
+            location_branch=(data.get("location_branch") or "")[:490],
+            discount_percentage="" if is_hh_deal else (
                 data.get("discount_percentage")
                 or request.data.get("discount_percentage")
                 or request.data.get("discount_offer")
                 or request.data.get("hh_discount_offer")
                 or ""
-            ),
+            )[:95],
             image=data.get("image"),
             is_hot_deal=data.get("is_hot_deal", False),
             expires_at=data.get("expires_at"),
             status=deal_status,
         )
 
-        post_to_happy_hour = data.get("post_to_happy_hour", False) or (request.data.get("post_to_happy_hour") in [True, "true", "True", "1", 1])
+        post_to_happy_hour = is_hh_deal or data.get("post_to_happy_hour", False) or (request.data.get("post_to_happy_hour") in [True, "true", "True", "1", 1])
         if post_to_happy_hour:
             hh = create_linked_happy_hour_from_deal(
                 deal=deal,
@@ -1142,10 +1220,22 @@ class AdminUpdateDealView(APIView):
         else:
             req_data = dict(request.data)
 
-        if req_data.get("price") in ["", "null", "None"]:
-            req_data["price"] = None
-        if not req_data.get("discount_percentage") and (req_data.get("discount_offer") or req_data.get("hh_discount_offer")):
-            req_data["discount_percentage"] = req_data.get("discount_offer") or req_data.get("hh_discount_offer")
+        raw_post_hh = req_data.get("post_to_happy_hour")
+        is_hh_deal = (
+            raw_post_hh in [True, "true", "True", "1", 1]
+            or bool(req_data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1])
+            or deal.linked_happy_hours.exists()
+        )
+        if is_hh_deal:
+            req_data['price'] = None
+            req_data['discount_percentage'] = ''
+            req_data['discount_offer'] = ''
+            req_data['hh_discount_offer'] = ''
+        else:
+            if req_data.get("price") in ["", "null", "None"]:
+                req_data["price"] = None
+            if not req_data.get("discount_percentage") and (req_data.get("discount_offer") or req_data.get("hh_discount_offer")):
+                req_data["discount_percentage"] = req_data.get("discount_offer") or req_data.get("hh_discount_offer")
         raw_food = req_data.get("food_type") if "food_type" in req_data else req_data.get("food_types")
         if raw_food is not None:
             req_data["food_type"] = normalize_food_type_input(raw_food)
@@ -1162,7 +1252,7 @@ class AdminUpdateDealView(APIView):
         if "image" in req_data and isinstance(req_data["image"], str):
             del req_data["image"]
 
-        serializer = AdminUpdateDealSerializer(deal, data=req_data, partial=True)
+        serializer = AdminUpdateDealSerializer(deal, data=req_data, partial=True, context={"request": request, "is_happy_hour_deal": is_hh_deal})
         if not serializer.is_valid():
             return Response(
                 {"success": False, "errors": serializer.errors},

@@ -70,7 +70,7 @@ class Deal(models.Model):
         default="user",
     )
 
-    title = models.CharField(max_length=200)
+    title = models.CharField(max_length=255)
     description = models.TextField()
 
     price = models.DecimalField(
@@ -97,7 +97,7 @@ class Deal(models.Model):
     end_time = models.TimeField(null=True, blank=True)
     has_time_slots = models.BooleanField(default=False)
 
-    location_branch = models.CharField(max_length=300, blank=True)
+    location_branch = models.CharField(max_length=500, blank=True)
 
     status = models.CharField(
         max_length=20,
@@ -106,7 +106,7 @@ class Deal(models.Model):
     )
 
     rejection_reason = models.TextField(blank=True)
-    discount_percentage = models.CharField(max_length=20, blank=True)
+    discount_percentage = models.CharField(max_length=100, blank=True)
 
     image = models.ImageField(upload_to="deals/", null=True, blank=True)
 

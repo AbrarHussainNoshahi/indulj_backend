@@ -67,7 +67,7 @@ class HappyHour(models.Model):
     )
     is_deal = models.BooleanField(default=False)
 
-    title = models.CharField(max_length=200)
+    title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
 
     event_type = models.CharField(
@@ -90,12 +90,12 @@ class HappyHour(models.Model):
         default="casual",
     )
 
-    location = models.CharField(max_length=300, blank=True)
-    phone_number = models.CharField(max_length=20, blank=True)
+    location = models.CharField(max_length=500, blank=True)
+    phone_number = models.CharField(max_length=50, blank=True)
 
     is_public = models.BooleanField(default=True)
 
-    discount_offer = models.CharField(max_length=100, blank=True)
+    discount_offer = models.CharField(max_length=255, blank=True)
     specials = models.JSONField(default=list, blank=True)
 
     image = models.ImageField(

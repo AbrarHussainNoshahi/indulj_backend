@@ -145,6 +145,18 @@ class AdminCreateDealSerializer(serializers.Serializer):
         else:
             data = dict(data)
 
+        if data.get("price") in ["", "null", "None"]:
+            data["price"] = None
+        if (
+            data.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+        ):
+            data["price"] = None
+            data["discount_percentage"] = ""
+            data["discount_offer"] = ""
+            data["hh_discount_offer"] = ""
+
         raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
         if raw_food is not None:
             data["food_type"] = normalize_food_type_input(raw_food)
@@ -160,6 +172,18 @@ class AdminCreateDealSerializer(serializers.Serializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
+        initial = getattr(self, "initial_data", {}) or {}
+        is_happy_hour = (
+            attrs.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+        )
+        if is_happy_hour:
+            attrs["price"] = None
+            attrs["discount_percentage"] = ""
+            return attrs
+
         price = attrs.get("price")
         discount = attrs.get("discount_percentage") or attrs.get("discount_offer") or attrs.get("hh_discount_offer")
         if price is None and not str(discount or "").strip():
@@ -207,6 +231,19 @@ class AdminUpdateDealSerializer(serializers.ModelSerializer):
         else:
             data = dict(data)
 
+        if data.get("price") in ["", "null", "None"]:
+            data["price"] = None
+        if (
+            data.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+            or (self.instance and getattr(self.instance, "linked_happy_hours", None) and self.instance.linked_happy_hours.exists())
+        ):
+            data["price"] = None
+            data["discount_percentage"] = ""
+            data["discount_offer"] = ""
+            data["hh_discount_offer"] = ""
+
         raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
         if raw_food is not None:
             data["food_type"] = normalize_food_type_input(raw_food)
@@ -223,6 +260,19 @@ class AdminUpdateDealSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
+        initial = getattr(self, "initial_data", {}) or {}
+        is_happy_hour = (
+            attrs.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+            or (self.instance and getattr(self.instance, "linked_happy_hours", None) and self.instance.linked_happy_hours.exists())
+        )
+        if is_happy_hour:
+            attrs["price"] = None
+            attrs["discount_percentage"] = ""
+            return attrs
+
         price = attrs.get("price") if "price" in attrs else getattr(self.instance, "price", None)
         discount = attrs.get("discount_percentage") if "discount_percentage" in attrs else getattr(self.instance, "discount_percentage", "")
         if price is None and not str(discount or "").strip():
@@ -450,6 +500,18 @@ class SubmitDealSerializer(serializers.Serializer):
         else:
             data = dict(data)
 
+        if data.get("price") in ["", "null", "None"]:
+            data["price"] = None
+        if (
+            data.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+        ):
+            data["price"] = None
+            data["discount_percentage"] = ""
+            data["discount_offer"] = ""
+            data["hh_discount_offer"] = ""
+
         raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
         if raw_food is not None:
             data["food_type"] = normalize_food_type_input(raw_food)
@@ -465,6 +527,18 @@ class SubmitDealSerializer(serializers.Serializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
+        initial = getattr(self, "initial_data", {}) or {}
+        is_happy_hour = (
+            attrs.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+        )
+        if is_happy_hour:
+            attrs["price"] = None
+            attrs["discount_percentage"] = ""
+            return attrs
+
         price = attrs.get("price")
         discount = attrs.get("discount_percentage") or attrs.get("discount_offer") or attrs.get("hh_discount_offer")
         if price is None and not str(discount or "").strip():
@@ -510,6 +584,19 @@ class CreateDealSerializer(serializers.ModelSerializer):
         else:
             data = dict(data)
 
+        if data.get("price") in ["", "null", "None"]:
+            data["price"] = None
+        if (
+            data.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+            or (self.instance and getattr(self.instance, "linked_happy_hours", None) and self.instance.linked_happy_hours.exists())
+        ):
+            data["price"] = None
+            data["discount_percentage"] = ""
+            data["discount_offer"] = ""
+            data["hh_discount_offer"] = ""
+
         raw_food = data.get("food_type") if "food_type" in data else data.get("food_types")
         if raw_food is not None:
             data["food_type"] = normalize_food_type_input(raw_food)
@@ -526,6 +613,19 @@ class CreateDealSerializer(serializers.ModelSerializer):
         return super().to_internal_value(data)
 
     def validate(self, attrs):
+        initial = getattr(self, "initial_data", {}) or {}
+        is_happy_hour = (
+            attrs.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("post_to_happy_hour") in [True, "true", "True", "1", 1]
+            or initial.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+            or self.context.get("is_happy_hour_deal") is True
+            or (self.instance and getattr(self.instance, "linked_happy_hours", None) and self.instance.linked_happy_hours.exists())
+        )
+        if is_happy_hour:
+            attrs["price"] = None
+            attrs["discount_percentage"] = ""
+            return attrs
+
         price = attrs.get("price") if "price" in attrs else getattr(self.instance, "price", None)
         discount = attrs.get("discount_percentage") if "discount_percentage" in attrs else getattr(self.instance, "discount_percentage", "")
         if price is None and not str(discount or "").strip():

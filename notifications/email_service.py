@@ -19,9 +19,28 @@ def build_deal_email_html(deal, user):
     deal_url = f"{base_url}/deals/{deal.id}"
     settings_url = f"{base_url}/user_set"
 
-    price_str = f"${deal.price}" if deal.price is not None else ""
-    discount_str = f"{deal.discount_percentage}% OFF" if deal.discount_percentage else ""
+    raw_price = getattr(deal, "price", None)
+    has_price = (
+        raw_price is not None
+        and str(raw_price).strip() != ""
+        and str(raw_price).strip() != "0"
+        and str(raw_price).strip().lower() not in ["null", "undefined"]
+    )
+    price_str = f"${raw_price}" if has_price else ""
+    raw_discount = (
+        getattr(deal, "discount_percentage", None)
+        or getattr(deal, "discount_offer", None)
+        or getattr(deal, "hh_discount_offer", None)
+        or ""
+    )
+    discount_str = f"{raw_discount}% OFF" if str(raw_discount).strip().isdigit() else str(raw_discount).strip()
     user_name = user.full_name or user.display_username or "Foodie"
+    is_submitter = bool(deal.submitted_by and deal.submitted_by.id == user.id)
+    headline = (
+        f"Hey {user_name}! Your deal is approved and now live!"
+        if is_submitter
+        else f"Hey {user_name}! A new deal was just published!"
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -61,7 +80,7 @@ def build_deal_email_html(deal, user):
           <tr>
             <td style="padding: 32px 28px 20px;">
               <h1 style="margin: 0 0 10px; font-size: 22px; font-weight: 800; color: #0f172a; line-height: 1.3;">
-                Hey {user_name}! A new deal was just published!
+                {headline}
               </h1>
               <p style="margin: 0 0 24px; font-size: 15px; color: #64748b; line-height: 1.6;">
                 Great food at great prices. Check out the latest exclusive deal available for you on INDULJ:
@@ -291,21 +310,30 @@ def _send_deal_emails_worker(deal_id):
         if deal.status != "active":
             return
 
+        recipients = {}
+        if deal.submitted_by and deal.submitted_by.email:
+            recipients[deal.submitted_by.email] = deal.submitted_by
+
         # Query all users where email_deals is enabled
         prefs = NotificationPreference.objects.filter(
             email_deals=True,
             user__is_active=True,
         ).select_related("user")
 
+        for pref in prefs:
+            if pref.user and pref.user.email:
+                recipients[pref.user.email] = pref.user
+
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@indulj.com")
 
-        for pref in prefs:
-            user = pref.user
-            if not user.email:
-                continue
-
+        for email, user in recipients.items():
             try:
-                subject = f"🔥 New Deal Alert: {deal.title} at {deal.restaurant.name if deal.restaurant else 'INDULJ'}"
+                is_submitter = bool(deal.submitted_by and deal.submitted_by.id == user.id)
+                if is_submitter:
+                    subject = f"🎉 Your Deal is Approved & Published: {deal.title}"
+                else:
+                    subject = f"🔥 New Deal Alert: {deal.title} at {deal.restaurant.name if deal.restaurant else 'INDULJ'}"
+
                 html_content = build_deal_email_html(deal, user)
                 text_content = strip_tags(html_content)
 
@@ -313,12 +341,12 @@ def _send_deal_emails_worker(deal_id):
                     subject=subject,
                     body=text_content,
                     from_email=from_email,
-                    to=[user.email],
+                    to=[email],
                 )
                 msg.attach_alternative(html_content, "text/html")
                 msg.send(fail_silently=True)
             except Exception as e:
-                logger.error(f"Failed to send deal email to {user.email}: {e}")
+                logger.error(f"Failed to send deal email to {email}: {e}")
 
     except Exception as exc:
         logger.error(f"Error in deal email worker: {exc}")
@@ -452,61 +480,13 @@ def send_happy_hour_planned_email(happy_hour):
         logger.error(f"Failed to start happy hour planned email thread: {e}")
 
 
-def _send_deal_planned_worker(deal_id):
-    try:
-        from deals.models import Deal
-        from accounts.models import NotificationPreference
-
-        deal = Deal.objects.select_related("restaurant", "submitted_by").get(pk=deal_id)
-        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@indulj.com")
-
-        recipients = {}
-        if deal.submitted_by and deal.submitted_by.email:
-            recipients[deal.submitted_by.email] = deal.submitted_by
-
-        opted_in = NotificationPreference.objects.filter(
-            email_deals=True,
-            user__is_active=True,
-        ).select_related("user")
-        for pref in opted_in:
-            if pref.user and pref.user.email:
-                recipients[pref.user.email] = pref.user
-
-        for email, user in recipients.items():
-            try:
-                is_submitter = (deal.submitted_by and deal.submitted_by.id == user.id)
-                if is_submitter:
-                    subject = f"🔥 Your Deal is Submitted: {deal.title}"
-                else:
-                    subject = f"🔥 New Deal Alert: {deal.title} at {deal.restaurant.name if deal.restaurant else 'INDULJ'}"
-
-                html_content = build_deal_email_html(deal, user)
-                text_content = strip_tags(html_content)
-
-                msg = EmailMultiAlternatives(
-                    subject=subject,
-                    body=text_content,
-                    from_email=from_email,
-                    to=[email],
-                )
-                msg.attach_alternative(html_content, "text/html")
-                msg.send(fail_silently=False)
-                logger.info(f"Deal email sent to {email}")
-            except Exception as e:
-                logger.error(f"Failed to send deal email to {email}: {e}")
-
-    except Exception as exc:
-        logger.error(f"Error in deal planned email worker: {exc}")
-
-
 def send_deal_planned_email(deal):
     """
-    Asynchronously dispatches submission confirmation and alerts when a deal is submitted.
+    Deals must only trigger announcement emails after approval (when status is 'active').
     """
     try:
-        if not deal:
+        if not deal or getattr(deal, "status", None) != "active":
             return
-        t = threading.Thread(target=_send_deal_planned_worker, args=(deal.id,), daemon=True)
-        t.start()
+        send_deal_notification_emails(deal)
     except Exception as e:
-        logger.error(f"Failed to start deal planned email thread: {e}")
+        logger.error(f"Failed to trigger approved deal notification: {e}")

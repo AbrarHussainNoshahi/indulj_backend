@@ -305,7 +305,7 @@ class RestaurantDetailSerializer(serializers.ModelSerializer):
     def get_can_submit(self, obj):
         if self.get_is_premium(obj):
             return True
-        return self.get_total_submissions(obj) < 10
+        return self.get_total_submissions(obj) < 5
 
     def get_is_registered(self, obj):
         return bool(obj.owner_id is not None)

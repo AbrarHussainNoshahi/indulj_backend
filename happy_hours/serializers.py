@@ -156,8 +156,26 @@ class HappyHourListSerializer(serializers.ModelSerializer):
         return None
 
     def get_time_slots(self, obj):
-        if obj.start_time and obj.end_time:
-            return f"{obj.start_time.strftime('%I:%M %p')} - {obj.end_time.strftime('%I:%M %p')}"
+        def _fmt(val):
+            if not val:
+                return None
+            if hasattr(val, "strftime"):
+                return val.strftime("%I:%M %p").lstrip("0")
+            s = str(val).strip()
+            for fmt in ("%H:%M:%S", "%H:%M", "%I:%M %p", "%I:%M%p"):
+                try:
+                    import datetime as dt
+                    return dt.datetime.strptime(s, fmt).strftime("%I:%M %p").lstrip("0")
+                except ValueError:
+                    pass
+            return s
+
+        s = _fmt(getattr(obj, "start_time", None))
+        e = _fmt(getattr(obj, "end_time", None))
+        if s and e:
+            return f"{s} - {e}"
+        elif s:
+            return s
         return None
 
 
@@ -260,6 +278,20 @@ class PlanHappyHourSerializer(serializers.Serializer):
         required=False,
         default=list,
     )
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+
+        if data.get("start_time") in ["", "null", "None"]:
+            data["start_time"] = None
+        if data.get("end_time") in ["", "null", "None"]:
+            data["end_time"] = None
+        return super().to_internal_value(data)
 
     def validate(self, attrs):
         start_time = attrs.get("start_time")
