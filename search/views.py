@@ -128,6 +128,8 @@ class GlobalSearchView(APIView):
                 "longitude": float(d.restaurant.longitude)
                 if d.restaurant.longitude is not None
                 else None,
+                "likes_count": getattr(d, "likes_count", 0),
+                "dislikes_count": getattr(d, "dislikes_count", 0),
                 "image_url": build_absolute_image(request, d.image),
             }
             for d in deals
@@ -303,6 +305,8 @@ class SearchDealsView(APIView):
                 "longitude": float(d.restaurant.longitude)
                 if d.restaurant.longitude is not None
                 else None,
+                "likes_count": getattr(d, "likes_count", 0),
+                "dislikes_count": getattr(d, "dislikes_count", 0),
                 "image_url": build_absolute_image(request, d.image),
             }
             for d in qs

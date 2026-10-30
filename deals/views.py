@@ -29,7 +29,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsAdmin, IsRestaurant, IsUser
 from restaurants.models import Restaurant
 
-from .models import Deal, SavedDeal, DealView
+from .models import Deal, SavedDeal, DealView, DealVote
 from .serializers import (
     DealListSerializer,
     DealDetailSerializer,
@@ -635,6 +635,132 @@ class UnsaveDealView(APIView):
 
         saved.delete()
         return Response({"success": True, "message": "Deal unsaved"})
+
+
+class LikeDealView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.get(
+                pk=pk,
+                status="active",
+                restaurant__status="active",
+            )
+        except Deal.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Active deal not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        vote = DealVote.objects.filter(deal=deal, user=request.user).first()
+        if vote:
+            if vote.vote_type == "like":
+                # Toggle off (remove like)
+                vote.delete()
+                deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+                deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+                deal.save(update_fields=["likes_count", "dislikes_count"])
+                return Response({
+                    "success": True,
+                    "action": "unliked",
+                    "user_vote": None,
+                    "likes_count": deal.likes_count,
+                    "dislikes_count": deal.dislikes_count,
+                    "message": "Like removed",
+                })
+            else:
+                # Switch from dislike to like
+                vote.vote_type = "like"
+                vote.save(update_fields=["vote_type", "updated_at"])
+                deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+                deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+                deal.save(update_fields=["likes_count", "dislikes_count"])
+                return Response({
+                    "success": True,
+                    "action": "liked",
+                    "user_vote": "like",
+                    "likes_count": deal.likes_count,
+                    "dislikes_count": deal.dislikes_count,
+                    "message": "Deal liked",
+                })
+        else:
+            # New like
+            DealVote.objects.create(deal=deal, user=request.user, vote_type="like")
+            deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+            deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+            deal.save(update_fields=["likes_count", "dislikes_count"])
+            return Response({
+                "success": True,
+                "action": "liked",
+                "user_vote": "like",
+                "likes_count": deal.likes_count,
+                "dislikes_count": deal.dislikes_count,
+                "message": "Deal liked",
+            }, status=status.HTTP_200_OK)
+
+
+class DislikeDealView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.get(
+                pk=pk,
+                status="active",
+                restaurant__status="active",
+            )
+        except Deal.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Active deal not found"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        vote = DealVote.objects.filter(deal=deal, user=request.user).first()
+        if vote:
+            if vote.vote_type == "dislike":
+                # Toggle off (remove dislike)
+                vote.delete()
+                deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+                deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+                deal.save(update_fields=["likes_count", "dislikes_count"])
+                return Response({
+                    "success": True,
+                    "action": "undisliked",
+                    "user_vote": None,
+                    "likes_count": deal.likes_count,
+                    "dislikes_count": deal.dislikes_count,
+                    "message": "Dislike removed",
+                })
+            else:
+                # Switch from like to dislike
+                vote.vote_type = "dislike"
+                vote.save(update_fields=["vote_type", "updated_at"])
+                deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+                deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+                deal.save(update_fields=["likes_count", "dislikes_count"])
+                return Response({
+                    "success": True,
+                    "action": "disliked",
+                    "user_vote": "dislike",
+                    "likes_count": deal.likes_count,
+                    "dislikes_count": deal.dislikes_count,
+                    "message": "Deal disliked",
+                })
+        else:
+            # New dislike
+            DealVote.objects.create(deal=deal, user=request.user, vote_type="dislike")
+            deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+            deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+            deal.save(update_fields=["likes_count", "dislikes_count"])
+            return Response({
+                "success": True,
+                "action": "disliked",
+                "user_vote": "dislike",
+                "likes_count": deal.likes_count,
+                "dislikes_count": deal.dislikes_count,
+                "message": "Deal disliked",
+            }, status=status.HTTP_200_OK)
 
 
 class SavedDealsView(APIView):

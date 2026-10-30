@@ -11,6 +11,8 @@ from .views import (
     DeleteMyDealView,
     SaveDealView,
     UnsaveDealView,
+    LikeDealView,
+    DislikeDealView,
     SavedDealsView,
 
     RestaurantDealListView,
@@ -42,6 +44,8 @@ urlpatterns = [
     path("saved/", SavedDealsView.as_view()),
     path("<int:pk>/save/", SaveDealView.as_view()),
     path("<int:pk>/unsave/", UnsaveDealView.as_view()),
+    path("<int:pk>/like/", LikeDealView.as_view()),
+    path("<int:pk>/dislike/", DislikeDealView.as_view()),
     path("<int:pk>/delete/", DeleteMyDealView.as_view()),
     path("<int:pk>/track-view/", TrackDealView.as_view()),
 

@@ -112,6 +112,8 @@ class Deal(models.Model):
 
     views_count = models.IntegerField(default=0)
     redemptions_count = models.IntegerField(default=0)
+    likes_count = models.PositiveIntegerField(default=0)
+    dislikes_count = models.PositiveIntegerField(default=0)
     is_hot_deal = models.BooleanField(default=False)
 
     expires_at = models.DateTimeField(null=True, blank=True)
@@ -171,3 +173,25 @@ class DealView(models.Model):
 
     class Meta:
         unique_together = ("deal", "session_id", "user")
+
+
+class DealVote(models.Model):
+    VOTE_CHOICES = [
+        ("like", "Like"),
+        ("dislike", "Dislike"),
+    ]
+
+    deal = models.ForeignKey(Deal, on_delete=models.CASCADE, related_name="votes")
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="deal_votes")
+    vote_type = models.CharField(max_length=10, choices=VOTE_CHOICES)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        unique_together = ("deal", "user")
+        indexes = [
+            models.Index(fields=["deal", "vote_type"]),
+        ]
+
+    def __str__(self):
+        return f"{self.user.email} {self.vote_type}d {self.deal.title}"

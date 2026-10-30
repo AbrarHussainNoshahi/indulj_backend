@@ -299,6 +299,9 @@ class DealListSerializer(serializers.ModelSerializer):
 
     image_url = serializers.SerializerMethodField()
     is_saved = serializers.SerializerMethodField()
+    likes_count = serializers.IntegerField(read_only=True)
+    dislikes_count = serializers.IntegerField(read_only=True)
+    user_vote = serializers.SerializerMethodField()
 
     latitude = serializers.FloatField(source="restaurant.latitude", read_only=True)
     longitude = serializers.FloatField(source="restaurant.longitude", read_only=True)
@@ -388,6 +391,9 @@ class DealListSerializer(serializers.ModelSerializer):
             "submitted_by_name",
             "created_by_role",
             "is_saved",
+            "likes_count",
+            "dislikes_count",
+            "user_vote",
             "latitude",
             "longitude",
             "is_potential_duplicate",
@@ -449,6 +455,17 @@ class DealListSerializer(serializers.ModelSerializer):
             user=request.user,
             deal=obj
         ).exists()
+
+    # ─────────────────────────────
+    # USER VOTE (LIKE / DISLIKE)
+    # ─────────────────────────────
+    def get_user_vote(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return None
+        from .models import DealVote
+        vote = DealVote.objects.filter(deal=obj, user=request.user).first()
+        return vote.vote_type if vote else None
 
 
 # ─────────────────────────────────────────────
