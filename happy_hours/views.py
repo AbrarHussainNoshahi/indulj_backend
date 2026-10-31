@@ -303,7 +303,10 @@ class PlanHappyHourView(APIView):
 
         # Also create deal if requested
         raw_also = request.data.get("also_add_to_deals")
-        also_add_deals = data.get("also_add_to_deals") or (raw_also in [True, "true", "True", "1", 1])
+        also_add_deals = (
+            raw_also in [True, "true", "True", "1", 1]
+            or data.get("also_add_to_deals") in [True, "true", "True", "1", 1]
+        )
         deal = None
 
         if also_add_deals:
@@ -993,7 +996,10 @@ class AdminPlanHappyHourView(APIView):
         enhanced_image = enhance_uploaded_image(raw_image) if raw_image else None
 
         raw_discount = (request.data.get("discount_offer") or data.get("discount_offer") or "")[:250]
-        is_deal_val = request.data.get("is_deal") in [True, "true", "True", "1", 1] or bool(request.data.get("is_happy_hour_deal"))
+        is_deal_val = (
+            request.data.get("is_deal") in [True, "true", "True", "1", 1]
+            or request.data.get("is_happy_hour_deal") in [True, "true", "True", "1", 1]
+        )
 
         raw_days = request.data.get("days_of_week") or data.get("days_of_week") or []
         if isinstance(raw_days, str):
@@ -1055,7 +1061,10 @@ class AdminPlanHappyHourView(APIView):
 
         # Also create deal if requested
         raw_also = request.data.get("also_add_to_deals")
-        also_add_deals = data.get("also_add_to_deals") or (raw_also in [True, "true", "True", "1", 1]) or is_deal_val
+        also_add_deals = (
+            raw_also in [True, "true", "True", "1", 1]
+            or data.get("also_add_to_deals") in [True, "true", "True", "1", 1]
+        )
 
         if also_add_deals:
             try:
