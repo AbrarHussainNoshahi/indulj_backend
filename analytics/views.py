@@ -1071,6 +1071,12 @@ class RestaurantDashboardStatsView(APIView):
                     "conversion_rate": conversion_rate,
                     "active_deals": deals.filter(status="active").count(),
                     "expired_deals": deals.filter(status="expired").count(),
+                    "expiring_soon_deals": deals.filter(
+                        status="active",
+                        expires_at__isnull=False,
+                        expires_at__gte=timezone.now(),
+                        expires_at__lte=timezone.now() + timedelta(days=7),
+                    ).count(),
                     "pending_deals": deals.filter(status="pending").count(),
                     "active_happy_hours": happy_hours.filter(
                         status__in=["active", "upcoming"]

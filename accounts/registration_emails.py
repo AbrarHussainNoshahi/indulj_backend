@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_app_base_url():
-    url = getattr(settings, "FRONTEND_URL", None) or config("FRONTEND_URL", default="https://indulj.vercel.app")
+    url = getattr(settings, "FRONTEND_URL", None) or config("FRONTEND_URL", default="https://indulj.app")
     return str(url).rstrip("/")
 
 

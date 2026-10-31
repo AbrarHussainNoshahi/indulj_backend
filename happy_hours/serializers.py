@@ -307,6 +307,13 @@ class PlanHappyHourSerializer(serializers.Serializer):
         return attrs
 
 class CreateHappyHourSerializer(serializers.ModelSerializer):
+    title = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=255,
+        default="",
+    )
+
     class Meta:
         model = HappyHour
         fields = [

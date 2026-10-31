@@ -179,7 +179,7 @@ CORS_ALLOWED_ORIGINS = [
     "capacitor://localhost",
     "http://localhost",
     "https://localhost",
-    "https://indulj.vercel.app",
+    "https://indulj.app",
     "https://indulj-v1.vercel.app",
 ]
 
@@ -209,7 +209,7 @@ CSRF_TRUSTED_ORIGINS = [
     "capacitor://localhost",
     "http://localhost",
     "https://localhost",
-    "https://indulj.vercel.app",
+    "https://indulj.app",
     "https://indulj-v1.vercel.app",
 ]
 
@@ -274,4 +274,4 @@ EMAIL_TIMEOUT = 20
 SUPERADMIN_CONTACT_EMAIL = config("SUPERADMIN_CONTACT_EMAIL", default="admin@indulj.com")
 
 GOOGLE_CLIENT_ID = config("GOOGLE_CLIENT_ID", default="")
-FRONTEND_URL = config("FRONTEND_URL", default="https://indulj.vercel.app")
+FRONTEND_URL = config("FRONTEND_URL", default="https://indulj.app")

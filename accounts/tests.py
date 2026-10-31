@@ -275,12 +275,12 @@ class RegistrationEmailTests(APITestCase):
             owner_name="Carlos",
             email="carlos@taco.com",
             password="TacoPassword123",
-            login_url="https://indulj.vercel.app/restaurant/login",
+            login_url="https://indulj.app/restaurant/login",
         )
         self.assertIn("Taco Palace", rest_html)
         self.assertIn("carlos@taco.com", rest_html)
         self.assertIn("TacoPassword123", rest_html)
-        self.assertIn("https://indulj.vercel.app/restaurant/login", rest_html)
+        self.assertIn("https://indulj.app/restaurant/login", rest_html)
 
         sub_admin_html = build_sub_admin_registration_email_html(
             full_name="Sarah Staff",
@@ -289,12 +289,12 @@ class RegistrationEmailTests(APITestCase):
             designation="Operations Lead",
             unique_id="SL-1234",
             admin_type="employee",
-            login_url="https://indulj.vercel.app/login",
+            login_url="https://indulj.app/login",
         )
         self.assertIn("Sarah Staff", sub_admin_html)
         self.assertIn("sarah@indulj.com", sub_admin_html)
         self.assertIn("SarahPassword456", sub_admin_html)
         self.assertIn("Operations Lead", sub_admin_html)
         self.assertIn("SL-1234", sub_admin_html)
-        self.assertIn("https://indulj.vercel.app/login", sub_admin_html)
+        self.assertIn("https://indulj.app/login", sub_admin_html)
 

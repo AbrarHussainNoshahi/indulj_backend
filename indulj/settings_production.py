@@ -15,7 +15,7 @@ SECRET_KEY = config("SECRET_KEY")
 ALLOWED_HOSTS = [
     ".railway.app",
     ".up.railway.app",
-    "indulj.vercel.app",
+    "indulj.app",
     "indulj-v1.vercel.app",
     "localhost",
     "127.0.0.1",
@@ -44,14 +44,14 @@ DATABASES = {
 # ─────────────────────────────────────────────
 
 CORS_ALLOWED_ORIGINS = [
-    "https://indulj.vercel.app",
+    "https://indulj.app",
     "https://indulj-v1.vercel.app",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://indulj.vercel.app",
+    "https://indulj.app",
     "https://indulj-v1.vercel.app",
     "https://*.railway.app",
     "https://*.up.railway.app",

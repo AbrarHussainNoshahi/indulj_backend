@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 def _get_app_base_url():
     # Can be configured via settings or environment
-    return getattr(settings, "FRONTEND_URL", "https://indulj.vercel.app")
+    return getattr(settings, "FRONTEND_URL", "https://indulj.app")
 
 
 def build_deal_email_html(deal, user):
@@ -374,21 +374,31 @@ def _send_happy_hour_emails_worker(happy_hour_id):
         if happy_hour.status not in ["active", "upcoming"]:
             return
 
-        # Query all users where email_happy_hours is enabled
-        prefs = NotificationPreference.objects.filter(
-            email_happy_hours=True,
-            user__is_active=True,
-        ).select_related("user")
+        recipients = {}
+        if happy_hour.submitted_by and happy_hour.submitted_by.email:
+            recipients[happy_hour.submitted_by.email] = happy_hour.submitted_by
+
+        # Broadcast to all opted-in users if the happy hour is public
+        if happy_hour.is_public:
+            prefs = NotificationPreference.objects.filter(
+                email_happy_hours=True,
+                user__is_active=True,
+            ).select_related("user")
+
+            for pref in prefs:
+                if pref.user and pref.user.email:
+                    recipients[pref.user.email] = pref.user
 
         from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@indulj.com")
 
-        for pref in prefs:
-            user = pref.user
-            if not user.email:
-                continue
-
+        for email, user in recipients.items():
             try:
-                subject = f"🍸 Happy Hour Alert: {happy_hour.title} at {happy_hour.restaurant.name if happy_hour.restaurant else 'INDULJ'}"
+                is_submitter = bool(happy_hour.submitted_by and happy_hour.submitted_by.id == user.id)
+                if is_submitter:
+                    subject = f"🎉 Your Happy Hour is Approved & Published: {happy_hour.title}"
+                else:
+                    subject = f"🍸 Happy Hour Alert: {happy_hour.title} at {happy_hour.restaurant.name if happy_hour.restaurant else 'INDULJ'}"
+
                 html_content = build_happy_hour_email_html(happy_hour, user)
                 text_content = strip_tags(html_content)
 
@@ -396,12 +406,13 @@ def _send_happy_hour_emails_worker(happy_hour_id):
                     subject=subject,
                     body=text_content,
                     from_email=from_email,
-                    to=[user.email],
+                    to=[email],
                 )
                 msg.attach_alternative(html_content, "text/html")
                 msg.send(fail_silently=True)
+                logger.info(f"Happy hour email sent to {email}")
             except Exception as e:
-                logger.error(f"Failed to send happy hour email to {user.email}: {e}")
+                logger.error(f"Failed to send happy hour email to {email}: {e}")
 
     except Exception as exc:
         logger.error(f"Error in happy hour email worker: {exc}")
@@ -409,7 +420,7 @@ def _send_happy_hour_emails_worker(happy_hour_id):
 
 def send_happy_hour_notification_emails(happy_hour):
     """
-    Asynchronously dispatches emails for an active/upcoming happy hour to all opted-in users.
+    Asynchronously dispatches emails for an active/upcoming happy hour to all opted-in users and creator.
     """
     try:
         if not happy_hour or happy_hour.status not in ["active", "upcoming"]:
@@ -423,61 +434,26 @@ def send_happy_hour_notification_emails(happy_hour):
 def _send_happy_hour_planned_worker(happy_hour_id):
     try:
         from happy_hours.models import HappyHour
-        from accounts.models import NotificationPreference
 
         happy_hour = HappyHour.objects.select_related("restaurant", "submitted_by").get(pk=happy_hour_id)
-        from_email = getattr(settings, "DEFAULT_FROM_EMAIL", "noreply@indulj.com")
+        if happy_hour.status not in ["active", "upcoming"]:
+            return
 
-        recipients = {}
-        if happy_hour.submitted_by and happy_hour.submitted_by.email:
-            recipients[happy_hour.submitted_by.email] = happy_hour.submitted_by
-
-        opted_in = NotificationPreference.objects.filter(
-            email_happy_hours=True,
-            user__is_active=True,
-        ).select_related("user")
-        for pref in opted_in:
-            if pref.user and pref.user.email:
-                recipients[pref.user.email] = pref.user
-
-        for email, user in recipients.items():
-            try:
-                is_submitter = (happy_hour.submitted_by and happy_hour.submitted_by.id == user.id)
-                if is_submitter:
-                    subject = f"🍸 Your Happy Hour is Submitted: {happy_hour.title}"
-                else:
-                    subject = f"🍸 New Happy Hour Announced: {happy_hour.title} at {happy_hour.restaurant.name if happy_hour.restaurant else 'INDULJ'}"
-
-                html_content = build_happy_hour_email_html(happy_hour, user)
-                text_content = strip_tags(html_content)
-
-                msg = EmailMultiAlternatives(
-                    subject=subject,
-                    body=text_content,
-                    from_email=from_email,
-                    to=[email],
-                )
-                msg.attach_alternative(html_content, "text/html")
-                msg.send(fail_silently=False)
-                logger.info(f"Happy hour email sent to {email}")
-            except Exception as e:
-                logger.error(f"Failed to send happy hour email to {email}: {e}")
-
+        _send_happy_hour_emails_worker(happy_hour_id)
     except Exception as exc:
         logger.error(f"Error in happy hour planned email worker: {exc}")
 
 
 def send_happy_hour_planned_email(happy_hour):
     """
-    Asynchronously dispatches submission confirmation and alerts when a happy hour is planned.
+    Happy hours must only trigger announcement/notification emails after approval (when status is 'active' or 'upcoming').
     """
     try:
-        if not happy_hour:
+        if not happy_hour or getattr(happy_hour, "status", None) not in ["active", "upcoming"]:
             return
-        t = threading.Thread(target=_send_happy_hour_planned_worker, args=(happy_hour.id,), daemon=True)
-        t.start()
+        send_happy_hour_notification_emails(happy_hour)
     except Exception as e:
-        logger.error(f"Failed to start happy hour planned email thread: {e}")
+        logger.error(f"Failed to trigger approved happy hour notification: {e}")
 
 
 def send_deal_planned_email(deal):

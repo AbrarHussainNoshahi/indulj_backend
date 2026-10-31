@@ -358,9 +358,10 @@ class PlanHappyHourView(APIView):
         except Exception:
             pass
 
-        # Send happy hour email notification
+        # Send happy hour email notification only if already active/upcoming (wait for admin approval otherwise)
         try:
-            send_happy_hour_planned_email(happy_hour)
+            if happy_hour.status in ["active", "upcoming"]:
+                send_happy_hour_planned_email(happy_hour)
         except Exception as he_err:
             import logging
             logging.getLogger(__name__).error(f"Failed to send happy hour email: {he_err}")
@@ -577,6 +578,10 @@ class RestaurantCreateHappyHourView(APIView):
         if "image" in req_data and req_data["image"]:
             req_data["image"] = enhance_uploaded_image(req_data["image"])
 
+        title_val = req_data.get("title")
+        if not title_val or not str(title_val).strip():
+            req_data["title"] = restaurant.name if restaurant else "Happy Hour"
+
         serializer = CreateHappyHourSerializer(data=req_data)
 
         if not serializer.is_valid():
@@ -633,7 +638,7 @@ class RestaurantCreateHappyHourView(APIView):
             import logging
             logging.getLogger(__name__).warning(f"Restaurant happy hour duplicate detection error: {e}")
 
-        if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
+        if happy_hour.status in ["active", "upcoming"]:
             send_happy_hour_notification_emails(happy_hour)
 
         return Response(
@@ -785,7 +790,7 @@ class RestaurantAcceptHappyHourView(APIView):
             related_happy_hour=happy_hour,
         )
 
-        if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
+        if happy_hour.status in ["active", "upcoming"]:
             send_happy_hour_notification_emails(happy_hour)
 
         return Response({
@@ -1370,7 +1375,7 @@ class AdminAcceptHappyHourView(APIView):
                 related_happy_hour=happy_hour,
             )
 
-        if happy_hour.is_public and happy_hour.status in ["active", "upcoming"]:
+        if happy_hour.status in ["active", "upcoming"]:
             send_happy_hour_notification_emails(happy_hour)
 
         return Response({
@@ -1497,7 +1502,7 @@ class AdminAcceptAllHappyHoursView(APIView):
                         related_happy_hour=hh,
                     )
 
-                if hh.is_public and hh.status in ["active", "upcoming"]:
+                if hh.status in ["active", "upcoming"]:
                     send_happy_hour_notification_emails(hh)
 
         return Response({
@@ -1647,4 +1652,4 @@ class AdminDismissHappyHourDuplicateView(APIView):
             "success": True,
             "message": f"Duplicate flag dismissed for '{hh.title}'.",
             "data": HappyHourListSerializer(hh, context={"request": request}).data,
-        })
+        })
