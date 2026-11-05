@@ -182,7 +182,7 @@ def check_with_gemini_ai(item_type: str, new_item_data: dict, candidate_list: li
         },
     }
 
-    models_to_try = ["gemini-3.8-flash", "gemini-flash-latest", "gemini-2.5-flash-lite"]
+    models_to_try = ["gemini-flash-lite-latest", "gemini-3.8-flash", "gemini-flash-latest"]
 
     for model in models_to_try:
         try:

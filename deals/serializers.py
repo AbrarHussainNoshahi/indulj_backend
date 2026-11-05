@@ -130,7 +130,7 @@ class AdminCreateDealSerializer(serializers.Serializer):
 
     post_to_happy_hour = serializers.BooleanField(required=False, default=False)
     hh_date = serializers.DateField(required=False, allow_null=True)
-    hh_group_size = serializers.IntegerField(required=False, default=1)
+    hh_group_size = serializers.IntegerField(required=False, allow_null=True, default=None)
     hh_event_type = serializers.CharField(required=False, default="casual")
     hh_vibe = serializers.CharField(required=False, default="casual")
     hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")
@@ -316,6 +316,13 @@ class DealListSerializer(serializers.ModelSerializer):
     duplicate_of = serializers.SerializerMethodField()
     days_of_week = serializers.SerializerMethodField()
     discount_offer = serializers.CharField(source="discount_percentage", read_only=True)
+    is_happy_hour_deal = serializers.SerializerMethodField()
+
+    def get_is_happy_hour_deal(self, obj):
+        try:
+            return bool(obj.linked_happy_hours.filter(is_deal=True).exists())
+        except Exception:
+            return False
 
     def get_days_of_week(self, obj):
         raw = getattr(obj, "days_of_week", None)
@@ -402,6 +409,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "duplicate_of",
             "duplicate_score",
             "duplicate_reasons",
+            "is_happy_hour_deal",
             "created_at",
         ]
 
@@ -502,7 +510,7 @@ class SubmitDealSerializer(serializers.Serializer):
     hh_date = serializers.DateField(required=False, allow_null=True)
     hh_start_time = serializers.CharField(required=False, allow_blank=True, default="")
     hh_end_time = serializers.CharField(required=False, allow_blank=True, default="")
-    hh_group_size = serializers.IntegerField(required=False, default=1)
+    hh_group_size = serializers.IntegerField(required=False, allow_null=True, default=None)
     hh_event_type = serializers.CharField(required=False, allow_blank=True, default="casual")
     hh_vibe = serializers.CharField(required=False, allow_blank=True, default="casual")
     hh_discount_offer = serializers.CharField(required=False, allow_blank=True, default="")

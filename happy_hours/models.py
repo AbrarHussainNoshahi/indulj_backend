@@ -76,7 +76,7 @@ class HappyHour(models.Model):
         default="casual",
     )
 
-    group_size = models.IntegerField(default=1)
+    group_size = models.IntegerField(null=True, blank=True, default=None)
 
     start_time = models.TimeField()
     end_time = models.TimeField()

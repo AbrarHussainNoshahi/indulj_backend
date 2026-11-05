@@ -1135,7 +1135,7 @@ class PublicRestaurantListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = Restaurant.objects.filter(status="active")
+        qs = Restaurant.objects.exclude(status="suspended")
 
         search = request.query_params.get("search")
         if search:

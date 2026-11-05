@@ -1,7 +1,43 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.permissions import AllowAny
-from django.db.models import Q
+from django.db.models import Q, Count
+
+def format_time_str(val):
+    if not val:
+        return ""
+    val_str = str(val).strip()
+    if "am" in val_str.lower() or "pm" in val_str.lower():
+        return val_str
+    try:
+        parts = val_str.split(":")
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 else 0
+        period = "AM" if h < 12 else "PM"
+        display_h = h % 12
+        if display_h == 0:
+            display_h = 12
+        return f"{display_h}:{m:02d} {period}"
+    except Exception:
+        return val_str
+
+def format_operating_hours(op_hours):
+    if not op_hours:
+        return "Open Daily"
+    if isinstance(op_hours, str):
+        return op_hours
+    if isinstance(op_hours, dict):
+        op_open = op_hours.get("open") or op_hours.get("opening_time")
+        op_close = op_hours.get("close") or op_hours.get("closing_time")
+        if op_open and op_close:
+            return f"{format_time_str(op_open)} - {format_time_str(op_close)}"
+        for day in ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]:
+            if day in op_hours and isinstance(op_hours[day], dict):
+                d_open = op_hours[day].get("open") or op_hours[day].get("opening_time")
+                d_close = op_hours[day].get("close") or op_hours[day].get("closing_time")
+                if d_open and d_close:
+                    return f"{format_time_str(d_open)} - {format_time_str(d_close)}"
+    return "Open Daily"
 import math
 
 from restaurants.models import Restaurant
@@ -430,10 +466,10 @@ class MapDataView(APIView):
             deal_qs = (
                 Deal.objects.filter(
                     status="active",
-                    restaurant__status="active",
                     restaurant__latitude__isnull=False,
                     restaurant__longitude__isnull=False,
                 )
+                .exclude(restaurant__status="suspended")
                 .select_related("restaurant")
                 .order_by("-is_hot_deal", "-created_at")
             )
@@ -480,6 +516,12 @@ class MapDataView(APIView):
                     "longitude": d_lng,
                     "pin_type": "hot" if d.is_hot_deal else "regular",
                     "image_url": build_absolute_image(request, d.image),
+                    "is_verified": bool(d.restaurant.owner_id is not None),
+                    "is_registered": bool(d.restaurant.owner_id is not None),
+                    "restaurant_is_verified": bool(d.restaurant.owner_id is not None),
+                    "time": (f"{d.start_time.strftime('%I:%M %p')} - {d.end_time.strftime('%I:%M %p')}" if (d.start_time and d.end_time) else format_operating_hours(d.restaurant.operating_hours)),
+                    "restaurant_time": format_operating_hours(d.restaurant.operating_hours),
+                    "number_of_deals": d.restaurant.deals.filter(status="active").count(),
                     "distance_miles": round(dist, 1) if dist is not None else None,
                     "distance_text": f"{round(dist, 1)} mi" if dist is not None else None,
                 })
@@ -490,11 +532,18 @@ class MapDataView(APIView):
             result["deals"] = deal_items
 
         if data_type in ["all", "restaurants"]:
-            rest_qs = Restaurant.objects.filter(
-                status="active",
-                latitude__isnull=False,
-                longitude__isnull=False,
-            ).order_by("-rating")
+            rest_qs = (
+                Restaurant.objects.filter(
+                    latitude__isnull=False,
+                    longitude__isnull=False,
+                )
+                .exclude(status="suspended")
+                .annotate(
+                    deal_count=Count("deals", filter=Q(deals__status="active"), distinct=True),
+                    hh_count=Count("happy_hours", filter=Q(happy_hours__status__in=["active", "upcoming"]), distinct=True),
+                )
+                .order_by("-rating")
+            )
 
             if city and city.lower() != "all cities":
                 rest_qs = rest_qs.filter(city__icontains=city)
@@ -526,6 +575,11 @@ class MapDataView(APIView):
                     "longitude": r_lng,
                     "logo_url": build_absolute_image(request, getattr(r, "logo", None)),
                     "pin_type": "restaurant",
+                    "is_verified": bool(r.owner_id is not None),
+                    "is_registered": bool(r.owner_id is not None),
+                    "time": format_operating_hours(r.operating_hours),
+                    "operating_hours": r.operating_hours,
+                    "number_of_deals": (getattr(r, "deal_count", 0) or 0) + (getattr(r, "hh_count", 0) or 0),
                     "distance_miles": round(dist, 1) if dist is not None else None,
                     "distance_text": f"{round(dist, 1)} mi" if dist is not None else None,
                 })

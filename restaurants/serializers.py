@@ -91,6 +91,7 @@ class RestaurantListSerializer(serializers.ModelSerializer):
     total_deals = serializers.SerializerMethodField()
     total_happy_hours = serializers.SerializerMethodField()
     is_registered = serializers.SerializerMethodField()
+    is_verified = serializers.SerializerMethodField()
     plan = serializers.SerializerMethodField()
     is_premium = serializers.SerializerMethodField()
     registered_by_id = serializers.IntegerField(source="registered_by.id", read_only=True, allow_null=True)
@@ -120,6 +121,9 @@ class RestaurantListSerializer(serializers.ModelSerializer):
             "total_deals",
             "total_happy_hours",
             "is_registered",
+            "is_verified",
+            "latitude",
+            "longitude",
             "subscription_plan",
             "plan",
             "is_premium",
@@ -158,6 +162,9 @@ class RestaurantListSerializer(serializers.ModelSerializer):
         return (obj.subscription_plan or "").lower() == "premium"
 
     def get_is_registered(self, obj):
+        return bool(obj.owner_id is not None)
+
+    def get_is_verified(self, obj):
         return bool(obj.owner_id is not None)
 
     def get_registered_by_name(self, obj):
@@ -333,15 +340,11 @@ class CreateRestaurantSerializer(serializers.Serializer):
     location = serializers.CharField()
     city = serializers.CharField(required=False, default="", allow_blank=True)
     description = serializers.CharField(required=False, default="", allow_blank=True)
-    latitude = serializers.DecimalField(
-        max_digits=9,
-        decimal_places=6,
+    latitude = serializers.FloatField(
         required=True,
     )
 
-    longitude = serializers.DecimalField(
-        max_digits=9,
-        decimal_places=6,
+    longitude = serializers.FloatField(
         required=True,
     )
     

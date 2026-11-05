@@ -158,13 +158,16 @@ class MapHappyHoursView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = HappyHour.objects.filter(
-            status__in=["active", "upcoming"],
-            is_public=True,
-            restaurant__status="active",
-            restaurant__latitude__isnull=False,
-            restaurant__longitude__isnull=False,
-        ).select_related("restaurant")
+        qs = (
+            HappyHour.objects.filter(
+                status__in=["active", "upcoming"],
+                is_public=True,
+                restaurant__latitude__isnull=False,
+                restaurant__longitude__isnull=False,
+            )
+            .exclude(restaurant__status="suspended")
+            .select_related("restaurant")
+        )
 
         city = request.query_params.get("city")
         if city:
@@ -174,6 +177,7 @@ class MapHappyHoursView(APIView):
             {
                 "id": item.id,
                 "title": item.title,
+                "restaurant_id": item.restaurant.id,
                 "restaurant_name": item.restaurant.name,
                 "latitude": item.restaurant.latitude,
                 "longitude": item.restaurant.longitude,
@@ -182,6 +186,11 @@ class MapHappyHoursView(APIView):
                 "end_time": item.end_time,
                 "is_featured": item.is_featured,
                 "vibe": item.vibe,
+                "is_verified": bool(item.restaurant.owner_id is not None),
+                "is_registered": bool(item.restaurant.owner_id is not None),
+                "restaurant_is_verified": bool(item.restaurant.owner_id is not None),
+                "time": (f"{item.start_time.strftime('%I:%M %p')} - {item.end_time.strftime('%I:%M %p')}" if (item.start_time and item.end_time) else "Open Daily"),
+                "number_of_deals": item.restaurant.happy_hours.filter(status__in=["active", "upcoming"]).count(),
             }
             for item in qs
         ]
@@ -269,7 +278,7 @@ class PlanHappyHourView(APIView):
             title=title_val,
             description=data.get("description", ""),
             event_type=data.get("event_type", "casual"),
-            group_size=data.get("group_size", 1),
+            group_size=int(data.get("group_size")) if str(data.get("group_size", "")).strip() not in ["", "None", "null", "undefined"] else None,
             start_time=start_time_val,
             end_time=end_time_val,
             date=date_val,
@@ -401,13 +410,13 @@ class PlanHappyHourView(APIView):
                 user=happy_hour.restaurant.owner,
                 type="happy_hour",
                 title="New Happy Hour Request",
-                message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title} for {happy_hour.group_size} people.",
+                message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title}" + (f" for {happy_hour.group_size} people." if happy_hour.group_size else "."),
                 related_happy_hour=happy_hour,
             )
         notify_admins(
             type="happy_hour",
             title="New Happy Hour Request",
-            message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title} for {happy_hour.group_size} people.",
+            message=f"{happy_hour.submitted_by.full_name} wants to plan {happy_hour.title}" + (f" for {happy_hour.group_size} people." if happy_hour.group_size else "."),
             related_happy_hour=happy_hour,
         )
 
@@ -1019,7 +1028,7 @@ class AdminPlanHappyHourView(APIView):
             title=title_val,
             description=data.get("description", ""),
             event_type=data.get("event_type", "casual"),
-            group_size=data.get("group_size", 1),
+            group_size=int(data.get("group_size")) if str(data.get("group_size", "")).strip() not in ["", "None", "null", "undefined"] else None,
             start_time=start_time_val,
             end_time=end_time_val,
             date=date_val,

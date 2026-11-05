@@ -217,7 +217,8 @@ class PlanHappyHourSerializer(serializers.Serializer):
     group_size = serializers.IntegerField(
         min_value=1,
         required=False,
-        default=1,
+        allow_null=True,
+        default=None,
     )
 
     start_time = serializers.TimeField(required=False, allow_null=True)
@@ -234,15 +235,11 @@ class PlanHappyHourSerializer(serializers.Serializer):
         default="",
     )
 
-    latitude = serializers.DecimalField(
-        max_digits=9,
-        decimal_places=6,
+    latitude = serializers.FloatField(
         required=False,
         allow_null=True,
     )
-    longitude = serializers.DecimalField(
-        max_digits=9,
-        decimal_places=6,
+    longitude = serializers.FloatField(
         required=False,
         allow_null=True,
     )
@@ -264,8 +261,9 @@ class PlanHappyHourSerializer(serializers.Serializer):
         default="",
     )
 
-    is_public = serializers.BooleanField(default=True)
+    is_public = serializers.BooleanField(required=False, default=True)
     also_add_to_deals = serializers.BooleanField(required=False, default=False)
+    is_deal = serializers.BooleanField(required=False, default=False)
     price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0.00)
 
     image = serializers.ImageField(
@@ -287,10 +285,51 @@ class PlanHappyHourSerializer(serializers.Serializer):
         else:
             data = dict(data)
 
-        if data.get("start_time") in ["", "null", "None"]:
+        if data.get("start_time") in ["", "null", "None", "undefined"]:
             data["start_time"] = None
-        if data.get("end_time") in ["", "null", "None"]:
+        if data.get("end_time") in ["", "null", "None", "undefined"]:
             data["end_time"] = None
+        if str(data.get("group_size", "")).strip() in ["", "null", "None", "undefined"]:
+            data["group_size"] = None
+        if str(data.get("price", "")).strip() in ["", "null", "None", "undefined"]:
+            data["price"] = 0.00
+        if data.get("date") in ["", "null", "None", "undefined"]:
+            data["date"] = None
+
+        if data.get("latitude") not in ["", "null", "None", "undefined", None]:
+            try:
+                data["latitude"] = round(float(data["latitude"]), 6)
+            except (ValueError, TypeError):
+                data["latitude"] = None
+        else:
+            data["latitude"] = None
+
+        if data.get("longitude") not in ["", "null", "None", "undefined", None]:
+            try:
+                data["longitude"] = round(float(data["longitude"]), 6)
+            except (ValueError, TypeError):
+                data["longitude"] = None
+        else:
+            data["longitude"] = None
+
+        raw_pub = data.get("is_public")
+        if raw_pub in ["false", "False", "0", 0, False]:
+            data["is_public"] = False
+        elif raw_pub in ["true", "True", "1", 1, True]:
+            data["is_public"] = True
+
+        raw_add = data.get("also_add_to_deals")
+        if raw_add in ["false", "False", "0", 0, False]:
+            data["also_add_to_deals"] = False
+        elif raw_add in ["true", "True", "1", 1, True]:
+            data["also_add_to_deals"] = True
+
+        raw_deal = data.get("is_deal")
+        if raw_deal in ["false", "False", "0", 0, False]:
+            data["is_deal"] = False
+        elif raw_deal in ["true", "True", "1", 1, True]:
+            data["is_deal"] = True
+
         return super().to_internal_value(data)
 
     def validate(self, attrs):
@@ -313,6 +352,22 @@ class CreateHappyHourSerializer(serializers.ModelSerializer):
         max_length=255,
         default="",
     )
+    group_size = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+        if str(data.get("group_size", "")).strip() in ["", "null", "None", "undefined"]:
+            data["group_size"] = None
+        return super().to_internal_value(data)
 
     class Meta:
         model = HappyHour
@@ -354,6 +409,23 @@ class RejectHappyHourSerializer(serializers.Serializer):
 
 
 class AdminUpdateHappyHourSerializer(serializers.ModelSerializer):
+    group_size = serializers.IntegerField(
+        required=False,
+        allow_null=True,
+        default=None,
+    )
+
+    def to_internal_value(self, data):
+        if hasattr(data, "dict"):
+            data = data.dict()
+        elif hasattr(data, "copy"):
+            data = data.copy()
+        else:
+            data = dict(data)
+        if str(data.get("group_size", "")).strip() in ["", "null", "None", "undefined"]:
+            data["group_size"] = None
+        return super().to_internal_value(data)
+
     class Meta:
         model = HappyHour
         fields = [

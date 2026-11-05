@@ -210,7 +210,7 @@ def create_linked_happy_hour_from_deal(deal, restaurant, user, role, data, is_ap
         created_by_role=role,
         title=(deal.title or "Happy Hour Deal")[:250],
         description=deal.description or "",
-        group_size=int(data.get("hh_group_size") or 1),
+        group_size=None,
         event_type=hh_event,
         vibe=hh_vibe,
         date=hh_date,
@@ -313,12 +313,15 @@ class MapDealsView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        qs = Deal.objects.filter(
-            status="active",
-            restaurant__status="active",
-            restaurant__latitude__isnull=False,
-            restaurant__longitude__isnull=False,
-        ).select_related("restaurant")
+        qs = (
+            Deal.objects.filter(
+                status="active",
+                restaurant__latitude__isnull=False,
+                restaurant__longitude__isnull=False,
+            )
+            .exclude(restaurant__status="suspended")
+            .select_related("restaurant")
+        )
 
         city = request.query_params.get("city")
         if city:
@@ -332,6 +335,7 @@ class MapDealsView(APIView):
             {
                 "id": deal.id,
                 "title": deal.title,
+                "restaurant_id": deal.restaurant.id,
                 "restaurant_name": deal.restaurant.name,
                 "latitude": deal.restaurant.latitude,
                 "longitude": deal.restaurant.longitude,
@@ -339,6 +343,12 @@ class MapDealsView(APIView):
                 "price": str(deal.price) if deal.price is not None else None,
                 "food_type": deal.food_type,
                 "day_of_week": deal.day_of_week,
+                "is_verified": bool(deal.restaurant.owner_id is not None),
+                "is_registered": bool(deal.restaurant.owner_id is not None),
+                "restaurant_is_verified": bool(deal.restaurant.owner_id is not None),
+                "operating_hours": deal.restaurant.operating_hours,
+                "time": (f"{deal.start_time.strftime('%I:%M %p')} - {deal.end_time.strftime('%I:%M %p')}" if (deal.start_time and deal.end_time) else "Open Daily"),
+                "number_of_deals": deal.restaurant.deals.filter(status="active").count(),
             }
             for deal in qs
         ]
@@ -438,14 +448,22 @@ class SubmitDealView(APIView):
         address_val = (loc or city_val)[:950]
         rest_name_val = (restaurant_name or "Partner Restaurant")[:250]
 
+        lat_val = data.get("latitude") or request.data.get("latitude") or request.data.get("lat")
+        lng_val = data.get("longitude") or request.data.get("longitude") or request.data.get("lng")
         if not restaurant:
             restaurant = Restaurant.objects.create(
                 name=rest_name_val,
                 city=city_val,
                 address=address_val,
+                latitude=lat_val if lat_val is not None else None,
+                longitude=lng_val if lng_val is not None else None,
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
+        elif restaurant and lat_val and lng_val and (not restaurant.latitude or not restaurant.longitude):
+            restaurant.latitude = lat_val
+            restaurant.longitude = lng_val
+            restaurant.save(update_fields=["latitude", "longitude"])
 
         # Check / set operating hours
         operating_hours = restaurant.operating_hours
@@ -558,7 +576,9 @@ class MyDealsView(APIView):
         qs = Deal.objects.filter(submitted_by=request.user).select_related("restaurant")
 
         status_filter = request.query_params.get("status")
-        if status_filter and status_filter != "all":
+        if status_filter == "happy_hour_deals":
+            qs = qs.filter(linked_happy_hours__is_deal=True).distinct()
+        elif status_filter and status_filter != "all":
             qs = qs.filter(status=status_filter)
 
         serializer = DealListSerializer(qs, many=True, context={"request": request})
@@ -1204,15 +1224,23 @@ class AdminCreateDealView(APIView):
         address_val = (loc or city_val)[:950]
         rest_name_val = (restaurant_name or "Partner Restaurant")[:250]
 
+        lat_val = data.get("latitude") or request.data.get("latitude") or request.data.get("lat")
+        lng_val = data.get("longitude") or request.data.get("longitude") or request.data.get("lng")
         if not restaurant:
             restaurant = Restaurant.objects.create(
                 name=rest_name_val,
                 city=city_val,
                 address=address_val,
+                latitude=lat_val if lat_val is not None else None,
+                longitude=lng_val if lng_val is not None else None,
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"},
                 registered_by=request.user if request.user.is_employee_admin else None
             )
+        elif restaurant and lat_val and lng_val and (not restaurant.latitude or not restaurant.longitude):
+            restaurant.latitude = lat_val
+            restaurant.longitude = lng_val
+            restaurant.save(update_fields=["latitude", "longitude"])
             if request.user.is_employee_admin:
                 deal_status = "active"
 
@@ -1450,6 +1478,8 @@ class AdminDealListView(APIView):
         status_filter = request.query_params.get("status")
         if status_filter == "duplicates" or request.query_params.get("duplicates") in ["true", "1"]:
             qs = qs.filter(is_potential_duplicate=True)
+        elif status_filter == "happy_hour_deals":
+            qs = qs.filter(linked_happy_hours__is_deal=True).distinct()
         elif status_filter and status_filter != "all":
             qs = qs.filter(status=status_filter)
 
@@ -1707,4 +1737,4 @@ class AdminDismissDealDuplicateView(APIView):
             "success": True,
             "message": f"Duplicate flag dismissed for '{deal.title}'.",
             "data": DealListSerializer(deal, context={"request": request}).data,
-        })
+        })
