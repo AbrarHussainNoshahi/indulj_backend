@@ -310,60 +310,7 @@ class PlanHappyHourView(APIView):
             import logging
             logging.getLogger(__name__).warning(f"Happy hour duplicate detection error: {e}")
 
-        # Also create deal if requested
-        raw_also = request.data.get("also_add_to_deals")
-        also_add_deals = (
-            raw_also in [True, "true", "True", "1", 1]
-            or data.get("also_add_to_deals") in [True, "true", "True", "1", 1]
-        )
         deal = None
-
-        if also_add_deals:
-            try:
-                from deals.models import Deal
-                day_name = date_val.strftime("%A").lower() if hasattr(date_val, "strftime") else "everyday"
-                valid_days = [c[0] for c in Deal.DAY_CHOICES]
-                if day_name not in valid_days:
-                    day_name = "everyday"
-
-                raw_price = data.get("price") or request.data.get("price")
-                try:
-                    price_val = float(raw_price) if raw_price else 0.00
-                except (ValueError, TypeError):
-                    price_val = 0.00
-
-                deal_image = None
-                if happy_hour.image:
-                    deal_image = happy_hour.image.name
-
-                deal = Deal.objects.create(
-                    restaurant=restaurant,
-                    submitted_by=request.user,
-                    created_by_role="user",
-                    title=f"{title_val}"[:200],
-                    description=data.get("description") or f"Happy Hour Special: {title_val}",
-                    food_type="other",
-                    price=price_val,
-                    day_of_week=day_name,
-                    has_time_slots=True,
-                    start_time=start_time_val,
-                    end_time=end_time_val,
-                    image=deal_image,
-                    location_branch=data.get("location", ""),
-                    status="pending",
-                )
-
-                notify_admins(
-                    type="deal",
-                    title="New Deal Submitted from Happy Hour",
-                    message=f"A new deal '{deal.title}' was submitted alongside a happy hour for approval.",
-                    related_deal=deal,
-                )
-
-
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Failed to auto-create deal from happy hour: {e}", exc_info=True)
 
         try:
             self._notify_restaurant(happy_hour)
@@ -1068,57 +1015,7 @@ class AdminPlanHappyHourView(APIView):
             import logging
             logging.getLogger(__name__).warning(f"Happy hour duplicate detection error: {e}")
 
-        # Also create deal if requested
-        raw_also = request.data.get("also_add_to_deals")
-        also_add_deals = (
-            raw_also in [True, "true", "True", "1", 1]
-            or data.get("also_add_to_deals") in [True, "true", "True", "1", 1]
-        )
-
-        if also_add_deals:
-            try:
-                from deals.models import Deal
-                day_name = date_val.strftime("%A").lower() if hasattr(date_val, "strftime") else "everyday"
-                valid_days = [c[0] for c in Deal.DAY_CHOICES]
-                if day_name not in valid_days:
-                    day_name = "everyday"
-
-                raw_price = data.get("price") or request.data.get("price")
-                try:
-                    price_val = float(raw_price) if raw_price else None
-                except (ValueError, TypeError):
-                    price_val = None
-
-                deal_image = None
-                if happy_hour.image:
-                    deal_image = happy_hour.image.name
-
-                deal = Deal.objects.create(
-                    restaurant=restaurant,
-                    submitted_by=request.user,
-                    created_by_role="admin",
-                    title=f"{title_val}"[:200],
-                    description=data.get("description") or f"Happy Hour Special: {title_val}",
-                    food_type="other",
-                    price=price_val,
-                    day_of_week=day_name,
-                    has_time_slots=True,
-                    start_time=start_time_val,
-                    end_time=end_time_val,
-                    discount_percentage=raw_discount,
-                    image=deal_image,
-                    location_branch=data.get("location", "") or restaurant.address or "",
-                    status=status_val,
-                )
-                happy_hour.deal = deal
-                happy_hour.save(update_fields=["deal"])
-
-                if deal.status == "active":
-                    from notifications.email_service import send_deal_notification_emails
-                    send_deal_notification_emails(deal)
-            except Exception as e:
-                import logging
-                logging.getLogger(__name__).error(f"Failed to auto-create deal from admin happy hour: {e}", exc_info=True)
+        deal = None
 
         if happy_hour.status == "active":
             send_happy_hour_notification_emails(happy_hour)

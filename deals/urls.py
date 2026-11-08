@@ -30,6 +30,7 @@ from .views import (
     AdminAcceptAllDealsView,
     AdminDeleteDealView,
     AdminDismissDealDuplicateView,
+    AdminCheckDealDuplicatesView,
 )
 
 urlpatterns = [
@@ -68,4 +69,5 @@ urlpatterns = [
     path("admin/<int:pk>/delete/", AdminDeleteDealView.as_view()),
     path("admin/<int:pk>/toggle-hot/", AdminToggleHotDealView.as_view()),
     path("admin/<int:pk>/dismiss-duplicate/", AdminDismissDealDuplicateView.as_view()),
+    path("admin/check-duplicates/", AdminCheckDealDuplicatesView.as_view()),
 ]

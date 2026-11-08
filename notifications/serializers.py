@@ -86,6 +86,22 @@ class NotificationSerializer(serializers.ModelSerializer):
                 return '/dashboard/orders'
 
         elif obj.type == 'happy_hour':
+            is_hh_deal = False
+            if obj.metadata and isinstance(obj.metadata, dict) and (obj.metadata.get('is_deal') or obj.metadata.get('is_happy_hour_deal')):
+                is_hh_deal = True
+            elif obj.related_happy_hour and getattr(obj.related_happy_hour, 'is_deal', False):
+                is_hh_deal = True
+            elif 'deal' in (obj.title or '').lower() or 'deal' in (obj.message or '').lower():
+                is_hh_deal = True
+
+            if is_hh_deal:
+                if role == 'restaurant':
+                    return '/restaurant/dashboard/res_deals?tab=happy_hour_deals'
+                elif role == 'admin':
+                    return '/admin/dashboard/deals?tab=happy_hour_deals'
+                else:
+                    return '/dashboard/happy-hours'
+
             if role == 'restaurant':
                 return '/restaurant/dashboard/res_happy-hours'
             elif role == 'admin':
