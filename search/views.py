@@ -432,6 +432,10 @@ class MapDataView(APIView):
         city = request.query_params.get("city", "").strip()
         day = request.query_params.get("day", "").strip().lower()
         data_type = request.query_params.get("type", "all").strip()
+        category = request.query_params.get("category", "").strip().lower()
+        deal_type = request.query_params.get("deal_type", "all").strip().lower()
+        timing = request.query_params.get("timing", "all").strip().lower()
+        q = request.query_params.get("q", "").strip()
 
         lat_param = request.query_params.get("lat") or request.query_params.get("latitude")
         lng_param = request.query_params.get("lng") or request.query_params.get("longitude")
@@ -447,7 +451,8 @@ class MapDataView(APIView):
                 user_lat = None
                 user_lng = None
 
-        max_radius = 50.0  # default 50 miles
+        # Default distance radius is 1.0 mile when GPS/coordinates are active
+        max_radius = 1.0 if (user_lat is not None and user_lng is not None) else None
         if radius_param:
             try:
                 if str(radius_param).strip().lower() in ["all", "none", "0", ""]:
@@ -463,22 +468,55 @@ class MapDataView(APIView):
         }
 
         if data_type in ["all", "deals"]:
-            deal_qs = (
-                Deal.objects.filter(
-                    status="active",
-                    restaurant__latitude__isnull=False,
-                    restaurant__longitude__isnull=False,
+            if deal_type == "happy_hour":
+                deal_qs = Deal.objects.none()
+            else:
+                deal_qs = (
+                    Deal.objects.filter(
+                        status="active",
+                        restaurant__latitude__isnull=False,
+                        restaurant__longitude__isnull=False,
+                    )
+                    .exclude(restaurant__status="suspended")
+                    .select_related("restaurant")
+                    .order_by("-is_hot_deal", "-created_at")
                 )
-                .exclude(restaurant__status="suspended")
-                .select_related("restaurant")
-                .order_by("-is_hot_deal", "-created_at")
-            )
 
-            if city and city.lower() != "all cities":
-                deal_qs = deal_qs.filter(restaurant__city__icontains=city)
+                if city and city.lower() != "all cities":
+                    deal_qs = deal_qs.filter(restaurant__city__icontains=city)
 
-            if day and day.lower() != "all":
-                deal_qs = deal_qs.filter(day_filter_q(day))
+                if day and day.lower() != "all":
+                    deal_qs = deal_qs.filter(day_filter_q(day))
+
+                if q:
+                    deal_qs = deal_qs.filter(
+                        Q(title__icontains=q)
+                        | Q(description__icontains=q)
+                        | Q(food_type__icontains=q)
+                        | Q(restaurant__name__icontains=q)
+                    )
+
+                if category and category != "all":
+                    deal_qs = deal_qs.filter(
+                        Q(food_type__icontains=category)
+                        | Q(restaurant__categories__icontains=category)
+                    )
+
+                if deal_type == "hot":
+                    deal_qs = deal_qs.filter(is_hot_deal=True)
+                elif deal_type == "regular":
+                    deal_qs = deal_qs.filter(is_hot_deal=False)
+
+                if timing == "lunch":
+                    deal_qs = deal_qs.filter(Q(start_time__lte="15:00:00", end_time__gte="11:00:00") | Q(start_time__isnull=True))
+                elif timing == "dinner":
+                    deal_qs = deal_qs.filter(Q(start_time__lte="21:00:00", end_time__gte="17:00:00") | Q(start_time__isnull=True))
+                elif timing == "late_night":
+                    deal_qs = deal_qs.filter(Q(end_time__gte="21:00:00") | Q(start_time__gte="21:00:00"))
+                elif timing == "now":
+                    from django.utils import timezone
+                    now_time = timezone.localtime().time()
+                    deal_qs = deal_qs.filter(Q(start_time__lte=now_time, end_time__gte=now_time) | Q(start_time__isnull=True))
 
             deal_items = []
             for d in deal_qs:
@@ -526,6 +564,88 @@ class MapDataView(APIView):
                     "distance_text": f"{round(dist, 1)} mi" if dist is not None else None,
                 })
 
+            # Include Happy Hours on Map when requested
+            if deal_type in ["all", "happy_hour"]:
+                hh_qs = (
+                    HappyHour.objects.filter(
+                        status__in=["active", "upcoming"],
+                        restaurant__latitude__isnull=False,
+                        restaurant__longitude__isnull=False,
+                    )
+                    .exclude(restaurant__status="suspended")
+                    .select_related("restaurant")
+                    .order_by("-created_at")
+                )
+                if city and city.lower() != "all cities":
+                    hh_qs = hh_qs.filter(restaurant__city__icontains=city)
+                if day and day.lower() != "all":
+                    hh_qs = hh_qs.filter(day_filter_q(day))
+                if q:
+                    hh_qs = hh_qs.filter(
+                        Q(title__icontains=q)
+                        | Q(description__icontains=q)
+                        | Q(restaurant__name__icontains=q)
+                    )
+                if category and category != "all":
+                    hh_qs = hh_qs.filter(restaurant__categories__icontains=category)
+                if timing == "lunch":
+                    hh_qs = hh_qs.filter(start_time__lte="15:00:00", end_time__gte="11:00:00")
+                elif timing == "dinner":
+                    hh_qs = hh_qs.filter(start_time__lte="21:00:00", end_time__gte="17:00:00")
+                elif timing == "late_night":
+                    hh_qs = hh_qs.filter(Q(end_time__gte="21:00:00") | Q(start_time__gte="21:00:00"))
+                elif timing == "now":
+                    from django.utils import timezone
+                    now_time = timezone.localtime().time()
+                    hh_qs = hh_qs.filter(start_time__lte=now_time, end_time__gte=now_time)
+
+                for hh in hh_qs:
+                    try:
+                        hh_lat = float(hh.restaurant.latitude)
+                        hh_lng = float(hh.restaurant.longitude)
+                    except (ValueError, TypeError):
+                        continue
+                    dist = None
+                    if user_lat is not None and user_lng is not None:
+                        dist = calculate_haversine_distance(user_lat, user_lng, hh_lat, hh_lng)
+                        if max_radius is not None and dist > max_radius:
+                            continue
+
+                    deal_items.append({
+                        "id": f"hh-{hh.id}",
+                        "raw_id": hh.id,
+                        "type": "happy_hour",
+                        "is_happy_hour": True,
+                        "is_deal": bool(hh.is_deal),
+                        "title": hh.title,
+                        "description": hh.description,
+                        "price": None,
+                        "food_type": hh.event_type or "Happy Hour",
+                        "day_of_week": ", ".join(hh.days_of_week) if hh.days_of_week else (hh.date.strftime("%A") if hh.date else "Everyday"),
+                        "start_time": str(hh.start_time) if hh.start_time else None,
+                        "end_time": str(hh.end_time) if hh.end_time else None,
+                        "is_hot_deal": False,
+                        "discount_percentage": hh.discount_offer or None,
+                        "location_branch": hh.location or hh.restaurant.address,
+                        "status": hh.status,
+                        "restaurant_id": hh.restaurant.id,
+                        "restaurant_name": hh.restaurant.name,
+                        "restaurant_city": hh.restaurant.city,
+                        "restaurant_address": hh.restaurant.address,
+                        "latitude": hh_lat,
+                        "longitude": hh_lng,
+                        "pin_type": "happy_hour",
+                        "image_url": build_absolute_image(request, hh.image),
+                        "is_verified": bool(hh.restaurant.owner_id is not None),
+                        "is_registered": bool(hh.restaurant.owner_id is not None),
+                        "restaurant_is_verified": bool(hh.restaurant.owner_id is not None),
+                        "time": f"{hh.start_time.strftime('%I:%M %p')} - {hh.end_time.strftime('%I:%M %p')}" if (hh.start_time and hh.end_time) else "Happy Hour",
+                        "restaurant_time": format_operating_hours(hh.restaurant.operating_hours),
+                        "number_of_deals": hh.restaurant.deals.filter(status="active").count(),
+                        "distance_miles": round(dist, 1) if dist is not None else None,
+                        "distance_text": f"{round(dist, 1)} mi" if dist is not None else None,
+                    })
+
             if user_lat is not None and user_lng is not None:
                 deal_items.sort(key=lambda x: (x["distance_miles"] if x["distance_miles"] is not None else 999999))
 
@@ -547,6 +667,17 @@ class MapDataView(APIView):
 
             if city and city.lower() != "all cities":
                 rest_qs = rest_qs.filter(city__icontains=city)
+
+            if q:
+                rest_qs = rest_qs.filter(
+                    Q(name__icontains=q)
+                    | Q(address__icontains=q)
+                    | Q(description__icontains=q)
+                    | Q(categories__icontains=q)
+                )
+
+            if category and category != "all":
+                rest_qs = rest_qs.filter(categories__icontains=category)
 
             rest_items = []
             for r in rest_qs:
@@ -596,6 +727,10 @@ class MapDataView(APIView):
                     "city": city,
                     "day": day,
                     "type": data_type,
+                    "category": category,
+                    "deal_type": deal_type,
+                    "timing": timing,
+                    "q": q,
                     "user_latitude": user_lat,
                     "user_longitude": user_lng,
                     "radius_miles": max_radius,
