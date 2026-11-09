@@ -829,15 +829,24 @@ class SaveDealView(APIView):
             deal=deal,
         )
 
-        if not created:
-            return Response(
-                {"success": False, "message": "Deal already saved"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # Sync like vote and update likes_count
+        DealVote.objects.update_or_create(
+            deal=deal,
+            user=request.user,
+            defaults={"vote_type": "like"},
+        )
+        deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+        deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+        deal.save(update_fields=["likes_count", "dislikes_count"])
 
         return Response(
-            {"success": True, "message": "Deal saved"},
-            status=status.HTTP_201_CREATED,
+            {
+                "success": True,
+                "message": "Deal saved to favorites",
+                "is_saved": True,
+                "likes_count": deal.likes_count,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
 
@@ -847,14 +856,26 @@ class UnsaveDealView(APIView):
     def delete(self, request, pk):
         try:
             saved = SavedDeal.objects.get(user=request.user, deal_id=pk)
+            saved.delete()
         except SavedDeal.DoesNotExist:
-            return Response(
-                {"success": False, "message": "Saved deal not found"},
-                status=status.HTTP_404_NOT_FOUND,
-            )
+            pass
 
-        saved.delete()
-        return Response({"success": True, "message": "Deal unsaved"})
+        # Sync like vote and update likes_count
+        DealVote.objects.filter(deal_id=pk, user=request.user).delete()
+        deal = Deal.objects.filter(pk=pk).first()
+        likes_count = 0
+        if deal:
+            deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
+            deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
+            deal.save(update_fields=["likes_count", "dislikes_count"])
+            likes_count = deal.likes_count
+
+        return Response({
+            "success": True,
+            "message": "Deal removed from favorites",
+            "is_saved": False,
+            "likes_count": likes_count,
+        })
 
 
 class LikeDealView(APIView):
@@ -878,6 +899,7 @@ class LikeDealView(APIView):
             if vote.vote_type == "like":
                 # Toggle off (remove like)
                 vote.delete()
+                SavedDeal.objects.filter(deal=deal, user=request.user).delete()
                 deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
                 deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
                 deal.save(update_fields=["likes_count", "dislikes_count"])
@@ -885,6 +907,7 @@ class LikeDealView(APIView):
                     "success": True,
                     "action": "unliked",
                     "user_vote": None,
+                    "is_saved": False,
                     "likes_count": deal.likes_count,
                     "dislikes_count": deal.dislikes_count,
                     "message": "Like removed",
@@ -893,6 +916,7 @@ class LikeDealView(APIView):
                 # Switch from dislike to like
                 vote.vote_type = "like"
                 vote.save(update_fields=["vote_type", "updated_at"])
+                SavedDeal.objects.get_or_create(deal=deal, user=request.user)
                 deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
                 deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
                 deal.save(update_fields=["likes_count", "dislikes_count"])
@@ -900,6 +924,7 @@ class LikeDealView(APIView):
                     "success": True,
                     "action": "liked",
                     "user_vote": "like",
+                    "is_saved": True,
                     "likes_count": deal.likes_count,
                     "dislikes_count": deal.dislikes_count,
                     "message": "Deal liked",
@@ -907,6 +932,7 @@ class LikeDealView(APIView):
         else:
             # New like
             DealVote.objects.create(deal=deal, user=request.user, vote_type="like")
+            SavedDeal.objects.get_or_create(deal=deal, user=request.user)
             deal.likes_count = DealVote.objects.filter(deal=deal, vote_type="like").count()
             deal.dislikes_count = DealVote.objects.filter(deal=deal, vote_type="dislike").count()
             deal.save(update_fields=["likes_count", "dislikes_count"])
@@ -914,6 +940,7 @@ class LikeDealView(APIView):
                 "success": True,
                 "action": "liked",
                 "user_vote": "like",
+                "is_saved": True,
                 "likes_count": deal.likes_count,
                 "dislikes_count": deal.dislikes_count,
                 "message": "Deal liked",

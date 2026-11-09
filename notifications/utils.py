@@ -163,12 +163,14 @@ def check_and_expire_happy_hours():
                 )
 
         for hh in qs:
-            if not hh.start_time or not hh.end_time:
-                continue
+            is_recurring_deal = getattr(hh, "is_deal", False)
 
-            is_recurring_deal = getattr(hh, "is_deal", False) and (
-                not hh.date or (hh.days_of_week and len(hh.days_of_week) > 0)
-            )
+            if not hh.start_time or not hh.end_time:
+                if not is_recurring_deal and hh.date and hh.date < now.date():
+                    if hh.status != "expired":
+                        hh.status = "expired"
+                        hh.save(update_fields=["status", "updated_at"])
+                continue
 
             if is_recurring_deal:
                 target_date = now.date()

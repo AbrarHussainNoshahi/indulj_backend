@@ -376,6 +376,12 @@ class MyHappyHoursView(APIView):
             submitted_by=request.user,
         ).select_related("restaurant")
 
+        is_deal_param = request.query_params.get("is_deal")
+        if is_deal_param in ["true", "True", "1"]:
+            qs = qs.filter(is_deal=True)
+        elif is_deal_param in ["false", "False", "0"]:
+            qs = qs.filter(is_deal=False)
+
         status_filter = request.query_params.get("status")
         if status_filter and status_filter != "all":
             qs = qs.filter(status=status_filter)
@@ -1241,7 +1247,9 @@ class AdminAcceptHappyHourView(APIView):
         now = timezone.localtime(timezone.now()) if timezone.is_aware(timezone.now()) else timezone.now()
         target_date = happy_hour.date or now.date()
         target_status = "upcoming"
-        if happy_hour.start_time and happy_hour.end_time:
+        if happy_hour.is_deal:
+            target_status = "active"
+        elif happy_hour.start_time and happy_hour.end_time:
             if target_date == now.date():
                 if happy_hour.start_time <= now.time() < happy_hour.end_time:
                     target_status = "active"
@@ -1369,7 +1377,9 @@ class AdminAcceptAllHappyHoursView(APIView):
             if operating_hours and isinstance(operating_hours, dict) and (operating_hours.get("open") or operating_hours.get("opening_time")) and (operating_hours.get("close") or operating_hours.get("closing_time")):
                 target_date = hh.date or now.date()
                 target_status = "upcoming"
-                if hh.start_time and hh.end_time and target_date == now.date():
+                if hh.is_deal:
+                    target_status = "active"
+                elif hh.start_time and hh.end_time and target_date == now.date():
                     if hh.start_time <= now.time() < hh.end_time:
                         target_status = "active"
                     elif now.time() >= hh.end_time:

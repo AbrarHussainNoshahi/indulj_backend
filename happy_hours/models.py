@@ -153,7 +153,7 @@ class HappyHour(models.Model):
         today = now.date()
         current_time = now.time()
 
-        if self.date and self.date != today:
+        if not self.is_deal and self.date and self.date != today:
             return False
 
         if self.days_of_week and isinstance(self.days_of_week, list) and len(self.days_of_week) > 0:
