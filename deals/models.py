@@ -116,6 +116,12 @@ class Deal(models.Model):
     dislikes_count = models.PositiveIntegerField(default=0)
     is_hot_deal = models.BooleanField(default=False)
 
+    # Deal Accuracy Verification Fields
+    accurate_votes_count = models.PositiveIntegerField(default=0)
+    inaccurate_votes_count = models.PositiveIntegerField(default=0)
+    is_reported_inaccurate = models.BooleanField(default=False)
+    last_verified_at = models.DateTimeField(null=True, blank=True)
+
     expires_at = models.DateTimeField(null=True, blank=True)
 
     # Duplicate detection fields
@@ -195,3 +201,24 @@ class DealVote(models.Model):
 
     def __str__(self):
         return f"{self.user.email} {self.vote_type}d {self.deal.title}"
+
+
+class DealAccuracyVote(models.Model):
+    deal = models.ForeignKey(Deal, on_delete=models.CASCADE, related_name="accuracy_votes")
+    user = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name="deal_accuracy_votes")
+    session_id = models.CharField(max_length=255, null=True, blank=True)
+    ip_address = models.GenericIPAddressField(null=True, blank=True)
+    is_accurate = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["deal", "is_accurate"]),
+        ]
+
+    def __str__(self):
+        target = self.user.email if self.user else (self.session_id or self.ip_address or "Anonymous")
+        status_label = "Live" if self.is_accurate else "Outdated"
+        return f"{target} marked {self.deal.title} as {status_label}"

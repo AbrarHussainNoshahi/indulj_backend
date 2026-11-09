@@ -303,6 +303,12 @@ class DealListSerializer(serializers.ModelSerializer):
     dislikes_count = serializers.IntegerField(read_only=True)
     user_vote = serializers.SerializerMethodField()
 
+    accurate_votes_count = serializers.IntegerField(read_only=True)
+    inaccurate_votes_count = serializers.IntegerField(read_only=True)
+    is_reported_inaccurate = serializers.BooleanField(read_only=True)
+    last_verified_at = serializers.DateTimeField(read_only=True)
+    user_accuracy_vote = serializers.SerializerMethodField()
+
     latitude = serializers.FloatField(source="restaurant.latitude", read_only=True)
     longitude = serializers.FloatField(source="restaurant.longitude", read_only=True)
     restaurant_phone = serializers.CharField(source="restaurant.phone", read_only=True, default="")
@@ -401,6 +407,11 @@ class DealListSerializer(serializers.ModelSerializer):
             "likes_count",
             "dislikes_count",
             "user_vote",
+            "accurate_votes_count",
+            "inaccurate_votes_count",
+            "is_reported_inaccurate",
+            "last_verified_at",
+            "user_accuracy_vote",
             "latitude",
             "longitude",
             "is_potential_duplicate",
@@ -474,6 +485,25 @@ class DealListSerializer(serializers.ModelSerializer):
         from .models import DealVote
         vote = DealVote.objects.filter(deal=obj, user=request.user).first()
         return vote.vote_type if vote else None
+
+    # ─────────────────────────────
+    # USER ACCURACY VOTE (LIVE / OUTDATED)
+    # ─────────────────────────────
+    def get_user_accuracy_vote(self, obj):
+        request = self.context.get("request")
+        if not request:
+            return None
+        from .models import DealAccuracyVote
+        if getattr(request, "user", None) and request.user.is_authenticated:
+            vote = DealAccuracyVote.objects.filter(deal=obj, user=request.user).first()
+            if vote:
+                return "accurate" if vote.is_accurate else "inaccurate"
+        session_id = getattr(request, "session", None) and request.session.session_key
+        if session_id:
+            vote = DealAccuracyVote.objects.filter(deal=obj, session_id=session_id).first()
+            if vote:
+                return "accurate" if vote.is_accurate else "inaccurate"
+        return None
 
 
 # ─────────────────────────────────────────────

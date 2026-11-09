@@ -14,6 +14,7 @@ from .views import (
     LikeDealView,
     DislikeDealView,
     SavedDealsView,
+    VerifyDealAccuracyView,
 
     RestaurantDealListView,
     RestaurantCreateDealView,
@@ -30,6 +31,7 @@ from .views import (
     AdminAcceptAllDealsView,
     AdminDeleteDealView,
     AdminDismissDealDuplicateView,
+    AdminDismissInaccuracyView,
     AdminCheckDealDuplicatesView,
 )
 
@@ -47,6 +49,7 @@ urlpatterns = [
     path("<int:pk>/unsave/", UnsaveDealView.as_view()),
     path("<int:pk>/like/", LikeDealView.as_view()),
     path("<int:pk>/dislike/", DislikeDealView.as_view()),
+    path("<int:pk>/verify-accuracy/", VerifyDealAccuracyView.as_view()),
     path("<int:pk>/delete/", DeleteMyDealView.as_view()),
     path("<int:pk>/track-view/", TrackDealView.as_view()),
 
@@ -69,5 +72,6 @@ urlpatterns = [
     path("admin/<int:pk>/delete/", AdminDeleteDealView.as_view()),
     path("admin/<int:pk>/toggle-hot/", AdminToggleHotDealView.as_view()),
     path("admin/<int:pk>/dismiss-duplicate/", AdminDismissDealDuplicateView.as_view()),
+    path("admin/<int:pk>/dismiss-inaccuracy/", AdminDismissInaccuracyView.as_view()),
     path("admin/check-duplicates/", AdminCheckDealDuplicatesView.as_view()),
 ]

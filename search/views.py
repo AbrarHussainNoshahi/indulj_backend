@@ -166,6 +166,9 @@ class GlobalSearchView(APIView):
                 else None,
                 "likes_count": getattr(d, "likes_count", 0),
                 "dislikes_count": getattr(d, "dislikes_count", 0),
+                "accurate_votes_count": getattr(d, "accurate_votes_count", 0),
+                "inaccurate_votes_count": getattr(d, "inaccurate_votes_count", 0),
+                "is_reported_inaccurate": getattr(d, "is_reported_inaccurate", False),
                 "image_url": build_absolute_image(request, d.image),
             }
             for d in deals
@@ -343,6 +346,9 @@ class SearchDealsView(APIView):
                 else None,
                 "likes_count": getattr(d, "likes_count", 0),
                 "dislikes_count": getattr(d, "dislikes_count", 0),
+                "accurate_votes_count": getattr(d, "accurate_votes_count", 0),
+                "inaccurate_votes_count": getattr(d, "inaccurate_votes_count", 0),
+                "is_reported_inaccurate": getattr(d, "is_reported_inaccurate", False),
                 "image_url": build_absolute_image(request, d.image),
             }
             for d in qs

@@ -29,7 +29,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsAdmin, IsRestaurant, IsUser
 from restaurants.models import Restaurant
 
-from .models import Deal, SavedDeal, DealView, DealVote
+from .models import Deal, SavedDeal, DealView, DealVote, DealAccuracyVote
 from .serializers import (
     DealListSerializer,
     DealDetailSerializer,
@@ -1010,6 +1010,116 @@ class DislikeDealView(APIView):
             }, status=status.HTTP_200_OK)
 
 
+class VerifyDealAccuracyView(APIView):
+    """
+    Crowdsourced Deal Accuracy Verification.
+    Replaces negative downvoting with a positive/outdated check:
+    'Is this deal still accurate / available?' (Yes, it's live / No, it's not)
+    """
+    permission_classes = [AllowAny]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.get(
+                pk=pk,
+                status__in=["active", "upcoming", "pending"],
+                restaurant__status="active",
+            )
+        except Deal.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Deal not found or not active"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        is_accurate_raw = request.data.get("is_accurate")
+        if is_accurate_raw is None:
+            return Response(
+                {"success": False, "message": "is_accurate (boolean) is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        is_accurate = bool(is_accurate_raw)
+
+        user = request.user if getattr(request, "user", None) and request.user.is_authenticated else None
+        session_id = None
+        if hasattr(request, "session"):
+            if not request.session.session_key:
+                try:
+                    request.session.save()
+                except Exception:
+                    pass
+            session_id = request.session.session_key
+
+        ip_address = request.META.get("HTTP_X_FORWARDED_FOR", request.META.get("REMOTE_ADDR", ""))
+        if ip_address and "," in ip_address:
+            ip_address = ip_address.split(",")[0].strip()
+
+        # Find existing vote by user, session, or IP
+        existing_vote = None
+        if user:
+            existing_vote = DealAccuracyVote.objects.filter(deal=deal, user=user).first()
+        elif session_id:
+            existing_vote = DealAccuracyVote.objects.filter(deal=deal, session_id=session_id).first()
+        elif ip_address:
+            existing_vote = DealAccuracyVote.objects.filter(deal=deal, ip_address=ip_address).first()
+
+        if existing_vote:
+            if existing_vote.is_accurate == is_accurate:
+                # Toggle off (unvote)
+                existing_vote.delete()
+                user_vote = None
+                action = "unvoted"
+            else:
+                # Switch vote
+                existing_vote.is_accurate = is_accurate
+                if user and not existing_vote.user:
+                    existing_vote.user = user
+                existing_vote.save(update_fields=["is_accurate", "updated_at"] + (["user"] if user else []))
+                user_vote = "accurate" if is_accurate else "inaccurate"
+                action = "switched"
+        else:
+            # Create new vote
+            DealAccuracyVote.objects.create(
+                deal=deal,
+                user=user,
+                session_id=session_id,
+                ip_address=ip_address,
+                is_accurate=is_accurate,
+            )
+            user_vote = "accurate" if is_accurate else "inaccurate"
+            action = "voted"
+
+        # Update deal aggregates
+        deal.accurate_votes_count = DealAccuracyVote.objects.filter(deal=deal, is_accurate=True).count()
+        deal.inaccurate_votes_count = DealAccuracyVote.objects.filter(deal=deal, is_accurate=False).count()
+        deal.is_reported_inaccurate = deal.inaccurate_votes_count > 0
+        deal.last_verified_at = timezone.now()
+
+        # Sync with legacy likes/dislikes counters for search/filtering
+        deal.dislikes_count = deal.inaccurate_votes_count
+        deal.save(update_fields=[
+            "accurate_votes_count",
+            "inaccurate_votes_count",
+            "is_reported_inaccurate",
+            "last_verified_at",
+            "dislikes_count",
+        ])
+
+        return Response({
+            "success": True,
+            "action": action,
+            "user_accuracy_vote": user_vote,
+            "accurate_votes_count": deal.accurate_votes_count,
+            "inaccurate_votes_count": deal.inaccurate_votes_count,
+            "is_reported_inaccurate": deal.is_reported_inaccurate,
+            "message": (
+                "Thank you! You verified this deal is still live." if user_vote == "accurate"
+                else "Thank you for the update! We've flagged this deal for admin review." if user_vote == "inaccurate"
+                else "Verification vote removed."
+            ),
+        }, status=status.HTTP_200_OK)
+
+
 class SavedDealsView(APIView):
     permission_classes = [IsAuthenticated, IsUser]
 
@@ -1775,6 +1885,10 @@ class AdminDealListView(APIView):
         status_filter = request.query_params.get("status")
         if status_filter == "duplicates" or request.query_params.get("duplicates") in ["true", "1"]:
             qs = qs.filter(is_potential_duplicate=True).exclude(linked_happy_hours__is_deal=True)
+        elif status_filter == "reported_inaccurate" or request.query_params.get("reported_inaccurate") in ["true", "1"]:
+            qs = qs.filter(
+                Q(is_reported_inaccurate=True) | Q(inaccurate_votes_count__gt=0) | Q(dislikes_count__gt=0)
+            ).exclude(linked_happy_hours__is_deal=True)
         elif status_filter == "happy_hour_deals":
             qs = qs.filter(linked_happy_hours__is_deal=True).distinct()
         else:
@@ -2171,6 +2285,40 @@ class AdminDismissDealDuplicateView(APIView):
                     {"success": False, "message": "Deal not found"},
                     status=status.HTTP_404_NOT_FOUND,
                 )
+
+
+class AdminDismissInaccuracyView(APIView):
+    """
+    Allows Admin to review reported inaccurate deals and dismiss the report flag
+    after verifying or updating details.
+    """
+    permission_classes = [IsAuthenticated, IsAdmin]
+
+    def post(self, request, pk):
+        try:
+            deal = Deal.objects.select_related("restaurant").get(pk=pk)
+            if request.user.is_employee_admin and deal.restaurant.registered_by_id != request.user.id:
+                return Response(
+                    {"success": False, "message": "Permission denied."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+            deal.is_reported_inaccurate = False
+            deal.inaccurate_votes_count = 0
+            deal.dislikes_count = 0
+            deal.save(update_fields=["is_reported_inaccurate", "inaccurate_votes_count", "dislikes_count"])
+            DealAccuracyVote.objects.filter(deal=deal, is_accurate=False).delete()
+            DealVote.objects.filter(deal=deal, vote_type="dislike").delete()
+
+            return Response({
+                "success": True,
+                "message": f"Inaccuracy reports cleared for '{deal.title}'. Deal marked as accurate.",
+                "data": DealListSerializer(deal, context={"request": request}).data,
+            })
+        except Deal.DoesNotExist:
+            return Response(
+                {"success": False, "message": "Deal not found."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
 
 
 class AdminCheckDealDuplicatesView(APIView):
