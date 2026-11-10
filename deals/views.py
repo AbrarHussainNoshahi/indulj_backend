@@ -26,8 +26,9 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsAdmin, IsRestaurant, IsUser
+from accounts.permissions import IsAdmin, IsRestaurant, IsUser, IsUserOrAdmin
 from restaurants.models import Restaurant
+from restaurants.geocoding import ensure_restaurant_coordinates
 
 from .models import Deal, SavedDeal, DealView, DealVote, DealAccuracyVote
 from .serializers import (
@@ -596,10 +597,13 @@ class SubmitDealView(APIView):
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
+            ensure_restaurant_coordinates(restaurant)
         elif restaurant and lat_val and lng_val and (not restaurant.latitude or not restaurant.longitude):
             restaurant.latitude = lat_val
             restaurant.longitude = lng_val
             restaurant.save(update_fields=["latitude", "longitude"])
+        elif restaurant and (not restaurant.latitude or not restaurant.longitude):
+            ensure_restaurant_coordinates(restaurant)
 
         # Check / set operating hours
         operating_hours = restaurant.operating_hours
@@ -809,7 +813,7 @@ class DeleteMyDealView(APIView):
 
 
 class SaveDealView(APIView):
-    permission_classes = [IsAuthenticated, IsUser]
+    permission_classes = [IsAuthenticated, IsUserOrAdmin]
 
     def post(self, request, pk):
         try:
@@ -851,7 +855,7 @@ class SaveDealView(APIView):
 
 
 class UnsaveDealView(APIView):
-    permission_classes = [IsAuthenticated, IsUser]
+    permission_classes = [IsAuthenticated, IsUserOrAdmin]
 
     def delete(self, request, pk):
         try:
@@ -1121,7 +1125,7 @@ class VerifyDealAccuracyView(APIView):
 
 
 class SavedDealsView(APIView):
-    permission_classes = [IsAuthenticated, IsUser]
+    permission_classes = [IsAuthenticated, IsUserOrAdmin]
 
     def get(self, request):
         saved = SavedDeal.objects.filter(user=request.user, deal__restaurant__status="active").select_related(
@@ -1610,10 +1614,13 @@ class AdminCreateDealView(APIView):
                 operating_hours={"open": "09:00", "close": "23:00"},
                 registered_by=request.user if request.user.is_employee_admin else None
             )
+            ensure_restaurant_coordinates(restaurant)
         elif restaurant and lat_val and lng_val and (not restaurant.latitude or not restaurant.longitude):
             restaurant.latitude = lat_val
             restaurant.longitude = lng_val
             restaurant.save(update_fields=["latitude", "longitude"])
+        elif restaurant and (not restaurant.latitude or not restaurant.longitude):
+            ensure_restaurant_coordinates(restaurant)
             if request.user.is_employee_admin:
                 deal_status = "active"
 

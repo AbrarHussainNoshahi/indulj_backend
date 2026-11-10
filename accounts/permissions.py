@@ -28,6 +28,15 @@ class IsUser(BasePermission):
         )
 
 
+class IsUserOrAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return bool(
+            request.user
+            and request.user.is_authenticated
+            and request.user.role in ["user", "admin"]
+        )
+
+
 class IsAdminOrRestaurant(BasePermission):
     def has_permission(self, request, view):
         return bool(

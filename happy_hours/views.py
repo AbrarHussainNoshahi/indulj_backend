@@ -15,6 +15,7 @@ from rest_framework.views import APIView
 
 from accounts.permissions import IsAdmin, IsRestaurant, IsUser
 from restaurants.models import Restaurant
+from restaurants.geocoding import ensure_restaurant_coordinates
 
 from .models import HappyHour, HappyHourRSVP
 from .serializers import (
@@ -245,12 +246,15 @@ class PlanHappyHourView(APIView):
                 status="active",
                 operating_hours={"open": "09:00", "close": "23:00"}
             )
+            ensure_restaurant_coordinates(restaurant)
         elif restaurant and lat and lng and (not restaurant.latitude or not restaurant.longitude):
             restaurant.latitude = lat
             restaurant.longitude = lng
             if city_val and not restaurant.city:
                 restaurant.city = city_val
             restaurant.save(update_fields=["latitude", "longitude", "city"] if city_val and not restaurant.city else ["latitude", "longitude"])
+        elif restaurant and (not restaurant.latitude or not restaurant.longitude):
+            ensure_restaurant_coordinates(restaurant)
 
         if not restaurant:
             restaurant = Restaurant.objects.filter(status="active").first()
@@ -915,12 +919,15 @@ class AdminPlanHappyHourView(APIView):
                 operating_hours={"open": "09:00", "close": "23:00"},
                 registered_by=request.user if request.user.is_employee_admin else None,
             )
+            ensure_restaurant_coordinates(restaurant)
         elif restaurant and lat and lng and (not restaurant.latitude or not restaurant.longitude):
             restaurant.latitude = lat
             restaurant.longitude = lng
             if city_val and not restaurant.city:
                 restaurant.city = city_val
             restaurant.save(update_fields=["latitude", "longitude", "city"] if city_val and not restaurant.city else ["latitude", "longitude"])
+        elif restaurant and (not restaurant.latitude or not restaurant.longitude):
+            ensure_restaurant_coordinates(restaurant)
 
         if not restaurant:
             restaurant = Restaurant.objects.filter(status="active").first()

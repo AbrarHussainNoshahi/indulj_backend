@@ -41,6 +41,7 @@ def format_operating_hours(op_hours):
 import math
 
 from restaurants.models import Restaurant
+from restaurants.geocoding import ensure_restaurant_coordinates
 from deals.models import Deal
 from happy_hours.models import HappyHour
 
@@ -466,6 +467,13 @@ class MapDataView(APIView):
                 else:
                     max_radius = float(radius_param)
             except (ValueError, TypeError):
+                pass
+
+        # Ensure any missing restaurant coordinates are auto-geocoded
+        for unpositioned in Restaurant.objects.filter(latitude__isnull=True).exclude(status="suspended")[:10]:
+            try:
+                ensure_restaurant_coordinates(unpositioned)
+            except Exception:
                 pass
 
         result = {
