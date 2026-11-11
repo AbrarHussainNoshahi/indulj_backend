@@ -316,6 +316,7 @@ class DealListSerializer(serializers.ModelSerializer):
     restaurant_rating = serializers.FloatField(source="restaurant.rating", read_only=True, default=0.0)
     restaurant_reviews = serializers.IntegerField(source="restaurant.total_reviews", read_only=True, default=0)
     restaurant_is_registered = serializers.SerializerMethodField()
+    restaurant_operating_hours = serializers.SerializerMethodField()
 
     duplicate_of_id = serializers.IntegerField(source="duplicate_of.id", read_only=True)
     duplicate_of_title = serializers.CharField(source="duplicate_of.title", read_only=True)
@@ -350,6 +351,12 @@ class DealListSerializer(serializers.ModelSerializer):
 
     def get_restaurant_is_registered(self, obj):
         return bool(obj.restaurant and obj.restaurant.owner_id is not None)
+
+    def get_restaurant_operating_hours(self, obj):
+        try:
+            return obj.restaurant.operating_hours or {}
+        except Exception:
+            return {}
 
     def get_duplicate_of(self, obj):
         if not obj.duplicate_of:
@@ -401,6 +408,7 @@ class DealListSerializer(serializers.ModelSerializer):
             "restaurant_reviews",
             "restaurant_categories",
             "restaurant_is_registered",
+            "restaurant_operating_hours",
             "submitted_by_name",
             "created_by_role",
             "is_saved",

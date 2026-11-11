@@ -683,15 +683,40 @@ class MapDataView(APIView):
                 rest_qs = rest_qs.filter(city__icontains=city)
 
             if q:
+                matching_deal_rest_ids = Deal.objects.filter(
+                    status="active"
+                ).filter(
+                    Q(title__icontains=q)
+                    | Q(description__icontains=q)
+                    | Q(food_type__icontains=q)
+                ).values_list("restaurant_id", flat=True)
+                matching_hh_rest_ids = HappyHour.objects.filter(
+                    status__in=["active", "upcoming"]
+                ).filter(
+                    Q(title__icontains=q)
+                    | Q(description__icontains=q)
+                ).values_list("restaurant_id", flat=True)
                 rest_qs = rest_qs.filter(
                     Q(name__icontains=q)
                     | Q(address__icontains=q)
                     | Q(description__icontains=q)
                     | Q(categories__icontains=q)
+                    | Q(id__in=matching_deal_rest_ids)
+                    | Q(id__in=matching_hh_rest_ids)
                 )
 
             if category and category != "all":
-                rest_qs = rest_qs.filter(categories__icontains=category)
+                matching_cat_deal_rest_ids = Deal.objects.filter(
+                    status="active", food_type__icontains=category
+                ).values_list("restaurant_id", flat=True)
+                matching_cat_hh_rest_ids = HappyHour.objects.filter(
+                    status__in=["active", "upcoming"], event_type__icontains=category
+                ).values_list("restaurant_id", flat=True)
+                rest_qs = rest_qs.filter(
+                    Q(categories__icontains=category)
+                    | Q(id__in=matching_cat_deal_rest_ids)
+                    | Q(id__in=matching_cat_hh_rest_ids)
+                )
 
             rest_items = []
             for r in rest_qs:
