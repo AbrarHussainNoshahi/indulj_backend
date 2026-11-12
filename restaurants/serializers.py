@@ -1,9 +1,21 @@
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 import json
 from .models import Restaurant, RestaurantGallery, Review, RestaurantMenuItem
 
 User = get_user_model()
+
+
+def normalize_coordinate(value):
+    """Round coordinate strings/floats to at most 6 decimal places for DecimalField."""
+    if value in ["", "null", "None", "undefined", None]:
+        return None
+    try:
+        dec = Decimal(str(value).strip())
+    except (InvalidOperation, ValueError, TypeError):
+        return value
+    return dec.quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
 
 
 class GallerySerializer(serializers.ModelSerializer):
@@ -390,9 +402,9 @@ class CreateRestaurantSerializer(serializers.Serializer):
 
 class UpdateRestaurantSerializer(serializers.ModelSerializer):
     owner_name = serializers.CharField(required=False, allow_blank=True, write_only=True)
-    owner_email = serializers.EmailField(required=False, write_only=True)
+    owner_email = serializers.EmailField(required=False, allow_blank=True, write_only=True)
     owner_phone = serializers.CharField(required=False, allow_blank=True, write_only=True)
-    password = serializers.CharField(required=False, allow_blank=True, write_only=True, min_length=6)
+    password = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = Restaurant
@@ -418,7 +430,40 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
             "owner_phone",
             "password",
         ]
-        
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, "copy") else dict(data)
+
+        if "latitude" in mutable_data:
+            normalized_lat = normalize_coordinate(mutable_data.get("latitude"))
+            mutable_data["latitude"] = str(normalized_lat) if normalized_lat is not None else None
+
+        if "longitude" in mutable_data:
+            normalized_lng = normalize_coordinate(mutable_data.get("longitude"))
+            mutable_data["longitude"] = str(normalized_lng) if normalized_lng is not None else None
+
+        if isinstance(mutable_data.get("subscription_plan"), str):
+            mutable_data["subscription_plan"] = mutable_data["subscription_plan"].strip().lower()
+
+        return super().to_internal_value(mutable_data)
+
+    def validate(self, attrs):
+        latitude = attrs.get("latitude")
+        longitude = attrs.get("longitude")
+
+        if latitude is not None and not (-90 <= float(latitude) <= 90):
+            raise serializers.ValidationError({"latitude": "Latitude must be between -90 and 90."})
+
+        if longitude is not None and not (-180 <= float(longitude) <= 180):
+            raise serializers.ValidationError({"longitude": "Longitude must be between -180 and 180."})
+
+        return attrs
+
+    def validate_password(self, value):
+        if value and len(value.strip()) < 6:
+            raise serializers.ValidationError("Password must be at least 6 characters long.")
+        return value.strip() if value else ""
+
     def validate_categories(self, value):
         if isinstance(value, str):
             try:
@@ -436,22 +481,30 @@ class UpdateRestaurantSerializer(serializers.ModelSerializer):
         return value
 
     def validate_owner_email(self, value):
+        if not value or not value.strip():
+            return ""
+        normalized = value.strip()
         restaurant = self.instance
         exclude_id = restaurant.owner.id if (restaurant and restaurant.owner) else None
 
-        qs = User.objects.filter(email=value)
+        qs = User.objects.filter(email__iexact=normalized)
         if exclude_id:
             qs = qs.exclude(id=exclude_id)
         if qs.exists():
             raise serializers.ValidationError("Email already registered")
 
-        return value
+        return normalized
 
     def update(self, instance, validated_data):
         owner_name = validated_data.pop("owner_name", None)
         owner_email = validated_data.pop("owner_email", None)
         owner_phone = validated_data.pop("owner_phone", None)
         password = validated_data.pop("password", None)
+
+        if isinstance(owner_email, str):
+            owner_email = owner_email.strip() or None
+        if isinstance(password, str):
+            password = password.strip() or None
 
         if password:
             instance.raw_password = password

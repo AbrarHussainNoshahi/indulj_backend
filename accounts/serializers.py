@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from rest_framework import serializers
 from .models import User, NotificationPreference, UserSession, Referral, PointsTransaction, ReceiptScan, Partner
 
@@ -496,6 +497,19 @@ class RestaurantRegisterSerializer(serializers.Serializer):
         child=serializers.CharField(max_length=100), required=False, default=list
     )
     description = serializers.CharField(required=False, allow_blank=True, default="")
+
+    def to_internal_value(self, data):
+        mutable_data = data.copy() if hasattr(data, "copy") else dict(data)
+        for coord_field in ("latitude", "longitude"):
+            val = mutable_data.get(coord_field)
+            if val not in ["", "null", "None", "undefined", None]:
+                try:
+                    mutable_data[coord_field] = str(
+                        Decimal(str(val).strip()).quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
+                    )
+                except (InvalidOperation, ValueError, TypeError):
+                    pass
+        return super().to_internal_value(mutable_data)
 
     def validate_email(self, value):
         normalized = value.strip().lower()

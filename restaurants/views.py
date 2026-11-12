@@ -27,7 +27,22 @@ from .serializers import (
     EditReviewSerializer,
     FlagReviewSerializer,
     ReviewResponseSerializer,
+    normalize_coordinate,
 )
+
+
+def extract_first_error_message(errors, fallback="Validation failed"):
+    """Extract a readable first error string from DRF serializer errors."""
+    if isinstance(errors, dict):
+        for val in errors.values():
+            msg = extract_first_error_message(val, fallback=None)
+            if msg:
+                return msg
+    elif isinstance(errors, list) and errors:
+        return extract_first_error_message(errors[0], fallback=fallback)
+    elif errors is not None:
+        return str(errors)
+    return fallback
 
 
 class AdminRestaurantListView(APIView):
@@ -129,8 +144,8 @@ class AdminCreateRestaurantView(APIView):
             raw_password=data["password"],
             description=data.get("description", ""),
             categories=data.get("categories", []),
-            latitude=data.get("latitude"),
-            longitude=data.get("longitude"),
+            latitude=normalize_coordinate(data.get("latitude")),
+            longitude=normalize_coordinate(data.get("longitude")),
             status="active",
             registered_by=registered_by,
         )
@@ -229,6 +244,7 @@ class AdminRestaurantDetailView(APIView):
         return Response(
             {
                 "success": False,
+                "message": extract_first_error_message(serializer.errors, "Failed to update restaurant"),
                 "errors": serializer.errors,
             },
             status=status.HTTP_400_BAD_REQUEST,
@@ -764,6 +780,7 @@ class MyRestaurantView(APIView):
         return Response(
             {
                 "success": False,
+                "message": extract_first_error_message(serializer.errors, "Failed to update profile"),
                 "errors": serializer.errors,
             },
             status=status.HTTP_400_BAD_REQUEST,
